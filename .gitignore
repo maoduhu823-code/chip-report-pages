@@ -1,0 +1,33 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Generated reports and runtime state
+output/
+*.log
+run.log
+crawl.log
+
+# Local publish repository for GitHub Pages
+github_pages_site/
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.python-version
+.venv/
+venv/
+env/
+
+# Local agent/editor state
+.claude/
+.idea/
+.vscode/
+
+# Temporary scratch files
+_tmp_*
+
+# OS files
+.DS_Store
+Thumbs.db
