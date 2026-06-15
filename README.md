@@ -22,4 +22,11 @@ git push -u origin main
 https://<你的用户名>.github.io/chip-report-pages/
 ```
 
-以后更新报告时，把新的 HTML 放到 `reports/`，更新 `index.html` 链接，再提交并推送即可。
+以后运行项目根目录的 `run_business.ps1` / `run_tech.ps1` 会自动复制最新 HTML、更新首页、提交并推送。
+
+也可以手动发布：
+
+```powershell
+..\publish_pages.ps1 -Report business
+..\publish_pages.ps1 -Report tech
+```
