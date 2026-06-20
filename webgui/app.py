@@ -37,6 +37,7 @@ import ratings_store  # noqa: E402
 import config  # noqa: E402
 import reporter  # noqa: E402
 import wechat_render  # noqa: E402
+import analyzer  # noqa: E402
 
 OUTPUT_DIR = os.path.join(_ROOT, "output")
 
@@ -211,6 +212,96 @@ def _write_output(name: str, text: str) -> dict:
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return {"name": name, "path": os.path.abspath(path), "open": f"/api/export/open?name={name}"}
+
+
+# ============================================================
+# 增值交互（阶段6）：试评分 / 源健康度 / 运行历史
+# ============================================================
+
+def _keyword_hits_by_bucket(article: dict, buckets: dict) -> dict:
+    """返回该文章在各关键词桶里命中的词 {分类: [命中词,...]}，用于「试评分」高亮解释。"""
+    blob = f"{article.get('title', '')}\n{article.get('text', '')[:800]}".lower()
+    out: dict[str, list[str]] = {}
+    for cat, words in (buckets or {}).items():
+        hit = [str(w) for w in words if str(w).lower() in blob]
+        if hit:
+            out[cat] = hit
+    return out
+
+
+def _tail_log_warnings(limit: int = 20) -> list[dict]:
+    """读 crawl.log / run.log 尾部的 WARNING/ERROR 行，辅助判断源健康度。"""
+    out: list[dict] = []
+    for log in ("crawl.log", "run.log"):
+        path = os.path.join(_ROOT, log)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        hits = [ln.rstrip() for ln in lines if "WARNING" in ln or "ERROR" in ln]
+        for ln in hits[-limit:]:
+            out.append({"log": log, "line": ln})
+    return out
+
+
+def _source_output_tally() -> dict:
+    """统计各信息源在 output/ 全部报告里累计产出的条目数。"""
+    tally: dict[str, int] = {}
+    for r in _list_reports():
+        rep = _load_report(r["file"])
+        for a in (rep or {}).get("articles", []):
+            s = a.get("source", "")
+            if s:
+                tally[s] = tally.get(s, 0) + 1
+    return tally
+
+
+# ============================================================
+# 已处理列表（防重复 seen-URL）编辑：删除条目即可让其下次重新处理/生成
+# ============================================================
+
+SEEN_SLUGS = ("business", "tech")
+_seen_lock = threading.Lock()
+
+
+def _seen_path(slug: str) -> str:
+    return os.path.join(OUTPUT_DIR, f"seen_{slug}.json")
+
+
+def _load_seen(slug: str) -> list[str]:
+    try:
+        with open(_seen_path(slug), encoding="utf-8") as f:
+            return list(json.load(f).get("urls", []))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_seen(slug: str, urls: list[str]) -> None:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    path = _seen_path(slug)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"urls": urls}, f, ensure_ascii=False, indent=0)
+    os.replace(tmp, path)
+
+
+def _url_meta_index() -> dict:
+    """URL → {title, source, date, kind}，跨全部报告（含附录）建索引，给 seen 列表补充可读信息。"""
+    idx: dict[str, dict] = {}
+    for r in _list_reports():
+        rep = _load_report(r["file"]) or {}
+        for a in rep.get("articles", []):
+            idx.setdefault(a.get("url", ""), {
+                "title": a.get("title", ""), "source": a.get("source", ""),
+                "date": r["date"], "kind": r["kind"],
+            })
+        for a in rep.get("appendix", []):
+            idx.setdefault(a.get("url", ""), {
+                "title": a.get("title", ""), "source": a.get("source", ""),
+                "date": r["date"], "kind": r["kind"],
+            })
+    return idx
 
 
 # ============================================================
@@ -624,5 +715,122 @@ def create_app() -> Flask:
             "ok": True, "count": len(results), "name": base,
             "path": os.path.abspath(path), "open": f"/api/export/open?name={base}",
         })
+
+    # ── 洞察 / 增值交互（阶段6）─────────────────────────────────
+    @app.route("/insights")
+    def insights_page():
+        return render_template("insights.html", active="insights")
+
+    @app.get("/api/history")
+    def api_history():
+        """运行历史：各报告的收录数/候选数/token 花费/执行器。"""
+        out = []
+        for r in _list_reports():
+            rep = _load_report(r["file"]) or {}
+            meta = rep.get("metadata", {}) or {}
+            out.append({
+                **r,
+                "candidates_count": rep.get("candidates_count"),
+                "appendix_count": len(rep.get("appendix", [])),
+                "ai_executor": meta.get("ai_executor", "—"),
+                "calls": meta.get("calls"),
+                "total_tokens": meta.get("total_tokens"),
+                "cost_usd": meta.get("cost_usd"),
+            })
+        return jsonify({"reports": out})
+
+    @app.get("/api/source_health")
+    def api_source_health():
+        """信息源健康度：启用状态 + 全部报告累计产出 + 近期日志告警。"""
+        tally = _source_output_tally()
+        sources = []
+        for listname, kind in (("RSS_SOURCES", "rss"), ("HTML_SOURCES", "html")):
+            for s in getattr(config, listname, []) or []:
+                name = s.get("name", "")
+                enabled = s.get("enabled", True)
+                cnt = tally.get(name, 0)
+                status = "disabled" if not enabled else ("ok" if cnt > 0 else "warn")
+                sources.append({
+                    "name": name, "kind": kind, "tier": s.get("tier", "media"),
+                    "weight": s.get("weight", 1.0), "enabled": enabled,
+                    "recent_count": cnt, "status": status,
+                })
+        return jsonify({"sources": sources, "warnings": _tail_log_warnings()})
+
+    @app.post("/api/rescore")
+    def api_rescore():
+        """改词/改 Prompt 后的「试评分」：用关键词兜底对 raw_articles.json 重打分，
+        即时、免费、不重爬、不写任何文件。直接反映 GUI 刚保存的关键词词库改动。"""
+        p = request.get_json(force=True, silent=True) or {}
+        kind = p.get("report", "business")
+        if kind not in ("business", "tech"):
+            kind = "business"
+        raw_path = os.path.join(OUTPUT_DIR, "raw_articles.json")
+        try:
+            with open(raw_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return jsonify({
+                "ok": False,
+                "error": "未找到 output/raw_articles.json，请先运行一次完整流程或 crawl_only.py",
+            }), 404
+        articles = data.get("articles", data) if isinstance(data, dict) else data
+
+        buckets = config.TECH_KEYWORD_BUCKETS if kind == "tech" else config.BUSINESS_KEYWORD_BUCKETS
+        items = []
+        for a in articles:
+            if kind == "tech":
+                score, label = analyzer._fallback_tech_score(a)
+            else:
+                score, label = analyzer._fallback_business_tags(a)
+            items.append({
+                "title": a.get("title", ""), "source": a.get("source", ""),
+                "url": a.get("url", ""), "score": score, "label": label,
+                "hits": _keyword_hits_by_bucket(a, buckets),
+            })
+        items.sort(key=lambda x: x["score"], reverse=True)
+        return jsonify({
+            "ok": True, "kind": kind, "count": len(items),
+            "threshold": config.BUSINESS_MIN_SCORE if kind == "business" else None,
+            "top_n": config.TECH_TOP_N if kind == "tech" else None,
+            "items": items,
+        })
+
+    # ── 已处理列表（防重复 seen-URL）查看/编辑 ─────────────────
+    @app.get("/api/seen")
+    def api_seen():
+        slug = request.args.get("slug", "business")
+        if slug not in SEEN_SLUGS:
+            return jsonify({"ok": False, "error": "slug 必须是 business 或 tech"}), 400
+        urls = _load_seen(slug)
+        idx = _url_meta_index()
+        items = []
+        for u in urls:
+            m = idx.get(u, {})
+            items.append({
+                "url": u, "title": m.get("title", ""),
+                "source": m.get("source", ""), "date": m.get("date", ""),
+            })
+        items.reverse()  # seen 新条目追加在尾部，倒序让最近处理的在最前
+        return jsonify({"ok": True, "slug": slug, "count": len(items), "items": items})
+
+    @app.post("/api/seen/delete")
+    def api_seen_delete():
+        """从 seen 列表移除选中 URL，使其下次运行重新处理（重新评分/生成）。"""
+        p = request.get_json(force=True, silent=True) or {}
+        slug = p.get("slug", "")
+        urls = p.get("urls", [])
+        if slug not in SEEN_SLUGS:
+            return jsonify({"ok": False, "error": "slug 必须是 business 或 tech"}), 400
+        if not isinstance(urls, list) or not urls:
+            return jsonify({"ok": False, "error": "未选择要移除的条目"}), 400
+        remove = set(urls)
+        with _seen_lock:
+            cur = _load_seen(slug)
+            kept = [u for u in cur if u not in remove]
+            removed = len(cur) - len(kept)
+            if removed:
+                _save_seen(slug, kept)
+        return jsonify({"ok": True, "removed": removed, "remaining": len(kept)})
 
     return app

@@ -159,10 +159,14 @@ a{color:var(--accent);text-decoration:none}
 .clear-rate:hover{color:var(--danger)}
 
 /* 快捷标记 */
-.flags{display:flex;gap:7px;margin:8px 0}
+.flags{display:flex;gap:7px;margin:8px 0;align-items:center}
 .flag-chip{border:1px solid var(--border);background:#fff;border-radius:14px;padding:3px 14px;font-size:12px;color:var(--muted);cursor:pointer;transition:.12s}
 .flag-chip:hover{border-color:var(--accent);color:var(--accent)}
 .flag-chip.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.regen-btn{margin-left:auto;border:1px solid var(--border);background:#fff;border-radius:14px;padding:3px 12px;font-size:12px;color:var(--accent2);cursor:pointer;transition:.12s}
+.regen-btn:hover{border-color:var(--accent2);background:#fff7ed}
+.regen-btn.done{color:var(--ok);border-color:#bbf7d0;background:#f0fdf4;cursor:default}
+.regen-btn:disabled{cursor:default;opacity:.8}
 
 /* 备注 */
 .note{width:100%;border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:12.5px;line-height:1.6;resize:none;font-family:inherit;min-height:34px}
@@ -193,6 +197,55 @@ a{color:var(--accent);text-decoration:none}
 .exp-rrow code{background:#eef1f6;padding:1px 7px;border-radius:5px;font-size:12px;color:#334155}
 .exp-hint{font-size:11px;color:var(--muted)}
 .exp-err{color:var(--danger);font-size:13px}
+
+/* ── 洞察页 ── */
+/* 试评分 */
+.rs-results{margin-top:14px;display:flex;flex-direction:column;gap:7px;max-height:480px;overflow:auto}
+.rs-row{display:flex;gap:12px;align-items:flex-start;padding:9px 12px;border:1px solid var(--border);border-radius:9px;background:#fcfcfd}
+.rs-row.in{border-color:#bfdbfe;background:#f5f9ff}
+.rs-score{flex-shrink:0;width:30px;height:30px;border-radius:7px;background:#e5e7eb;color:#6b7280;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+.rs-score.in{background:var(--accent);color:#fff}
+.rs-main{min-width:0;flex:1}
+.rs-title{font-size:14px;font-weight:600;line-height:1.4}
+.rs-title a{color:var(--text)}
+.rs-title a:hover{color:var(--accent)}
+.rs-sub{font-size:12px;color:var(--muted);margin:2px 0 5px}
+.rs-hits{display:flex;flex-wrap:wrap;gap:5px}
+.rs-hit{font-size:11px;background:#eef4ff;color:#1d4ed8;border-radius:10px;padding:2px 9px}
+.rs-nohit{font-size:11px;color:#9ca3af;font-style:italic}
+
+/* 源健康度 */
+.sh-list{display:flex;flex-direction:column;gap:6px}
+.sh-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:#fcfcfd;font-size:13px}
+.sh-row.sh-warn{border-color:#fed7aa;background:#fff7ed}
+.sh-row.sh-disabled{opacity:.55}
+.sh-dot{font-size:11px}
+.sh-ok .sh-dot{color:var(--ok)}
+.sh-warn .sh-dot{color:var(--accent2)}
+.sh-disabled .sh-dot{color:var(--muted)}
+.sh-name{font-weight:600;min-width:150px}
+.sh-kind{font-size:11px;color:var(--muted);background:#f3f4f6;border-radius:6px;padding:1px 7px}
+.sh-status{font-size:12px;color:var(--muted);margin-left:auto;white-space:nowrap}
+.sh-warns{display:flex;flex-direction:column;gap:4px;max-height:200px;overflow:auto}
+.sh-warn{font-size:11.5px;font-family:ui-monospace,Consolas,monospace;color:#92400e;line-height:1.5;word-break:break-word}
+.sh-warn-log{display:inline-block;background:#fef3c7;color:#92400e;border-radius:4px;padding:0 5px;font-weight:700;margin-right:4px}
+.sh-nowarn{font-size:12px;color:var(--muted)}
+
+/* 运行历史 */
+.hist-wrap{display:flex;flex-direction:column;gap:2px;overflow-x:auto}
+.hist-row{display:grid;grid-template-columns:96px 64px 56px 56px 1fr 56px 72px 80px;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;min-width:560px}
+.hist-head{font-weight:700;color:var(--muted);font-size:12px;border-bottom:2px solid var(--border)}
+.hist-row .badge{justify-self:start}
+.hist-exec{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 已处理列表编辑 */
+.seen-list{margin-top:12px;display:flex;flex-direction:column;gap:5px;max-height:460px;overflow:auto}
+.seen-row{display:flex;gap:11px;align-items:flex-start;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:#fcfcfd;cursor:pointer}
+.seen-row:hover{border-color:var(--accent)}
+.seen-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);flex-shrink:0;margin-top:2px}
+.seen-main{min-width:0;flex:1}
+.seen-title{font-size:13.5px;font-weight:600;line-height:1.4}
+.seen-sub{font-size:11px;color:var(--muted);line-height:1.5;word-break:break-all;margin-top:1px}
 
 @media (max-width:760px){
   .rcard{flex-direction:column;gap:12px}

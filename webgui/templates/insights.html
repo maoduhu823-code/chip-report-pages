@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}洞察 — 芯片资讯{% endblock %}
+{% block content %}
+<div class="actionbar"><div class="actionbar-title">洞察 · 增值交互</div></div>
+<p class="hint">改词后即时「试评分」预览、信息源健康度、历史运行的收录与 Token 花费。试评分用关键词兜底，不调用 LLM、不重爬、不写文件。</p>
+
+<section class="card">
+  <h2 class="card-h">🧪 改词试评分 <span class="muted">（先到「控制台」改关键词词库并保存，再回来试评分看效果）</span></h2>
+  <div class="run-controls">
+    <div class="run-field">
+      <label for="rs-report">报告类型</label>
+      <select id="rs-report">
+        <option value="business">商业（标签 + 收录阈值）</option>
+        <option value="tech">技术（门类 + Top-N）</option>
+      </select>
+    </div>
+    <button id="btn-rescore" class="btn btn-primary" type="button">试评分</button>
+    <span id="rs-stat" class="run-status"></span>
+  </div>
+  <div id="rs-results" class="rs-results"></div>
+</section>
+
+<section class="card">
+  <h2 class="card-h">♻️ 已处理列表（防重复） <span class="muted">（对生成效果不满意？删除条目，下次运行将重新处理/生成该新闻）</span></h2>
+  <div class="run-controls">
+    <div class="run-field">
+      <label for="seen-slug">列表</label>
+      <select id="seen-slug">
+        <option value="business">商业日报 seen</option>
+        <option value="tech">技术周报 seen</option>
+      </select>
+    </div>
+    <input id="seen-search" class="search-box" type="search" placeholder="搜索标题 / 来源 / URL…">
+    <button id="seen-all" class="chip-btn" type="button">全选</button>
+    <button id="seen-none" class="chip-btn" type="button">全不选</button>
+    <button id="btn-seen-del" class="btn btn-ghost" type="button">删除选中（下次重新处理）</button>
+    <span id="seen-stat" class="run-status"></span>
+  </div>
+  <div id="seen-list" class="seen-list">加载中…</div>
+</section>
+
+<section class="card">
+  <h2 class="card-h">📡 信息源健康度 <span class="muted">（启用但累计 0 产出 = 可能抓取失败 / 被墙）</span></h2>
+  <div id="sh-list" class="sh-list">加载中…</div>
+  <h3 class="sub-h">近期日志告警（crawl.log / run.log）</h3>
+  <div id="sh-warns" class="sh-warns"></div>
+</section>
+
+<section class="card">
+  <h2 class="card-h">🕑 运行历史 <span class="muted">（output/ 各报告的收录 / 候选 / Token）</span></h2>
+  <div id="hist-wrap" class="hist-wrap">加载中…</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='insights.js') }}"></script>
+{% endblock %}

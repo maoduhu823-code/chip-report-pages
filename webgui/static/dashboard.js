@@ -191,7 +191,29 @@ function flagRow(a, card) {
     });
     row.appendChild(chip);
   }
+  // 对生成效果不满意 → 移出已处理列表，下次运行重新处理/生成
+  const regen = el("button", {
+    class: "regen-btn", type: "button",
+    title: "从已处理列表移除，下次运行将重新评分/生成这条",
+  }, "♻️ 重新生成");
+  regen.addEventListener("click", () => regenArticle(a, regen));
+  row.appendChild(regen);
   return row;
+}
+
+async function regenArticle(a, btn) {
+  const kindLabel = STATE.kind === "business" ? "商业日报" : "技术周报";
+  if (!confirm(`把这条移出「已处理列表」？下次运行${kindLabel}会重新处理并重新生成它。`)) return;
+  btn.disabled = true;
+  try {
+    const d = await fetch("/api/seen/delete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug: STATE.kind, urls: [a.url] }),
+    }).then((r) => r.json());
+    if (d.ok && d.removed) { btn.textContent = "✓ 已移出，待重跑"; btn.classList.add("done"); }
+    else if (d.ok) { btn.textContent = "不在已处理列表"; }
+    else { btn.disabled = false; }
+  } catch (_) { btn.disabled = false; }
 }
 
 function setHuman(a, val) {

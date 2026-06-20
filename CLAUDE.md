@@ -10,10 +10,11 @@
 | `python main.py --report tech` | 技术周报：Top N 精读 + 本周讯息总结 + 未入选附录 |
 | `python main.py` / `--report both` | 两份都生成（手动调试用） |
 | `python crawl_only.py` | 纯爬虫，不调 LLM，存 `output/raw_articles.json`（日志 `crawl.log`） |
-| `.\run_business.ps1 [-llmOnly] [-codex] [-NoPublish]` | 商业日报流程：默认直接运行 Python 主流程，生成后自动发布最新 HTML 到 `github_pages_site` 并推送 GitHub Pages；带 `-NoPublish` 时只生成不发布；带 `-llmOnly` 时复用 `output/raw_articles.json`；带 `-codex` 时才使用旧式 Codex agent 任务文档 |
-| `.\run_tech.ps1 [-codex] [-NoPublish]` | 技术周报流程：默认直接运行 Python 主流程，生成后自动发布最新 HTML 到 `github_pages_site` 并推送 GitHub Pages；带 `-NoPublish` 时只生成不发布；带 `-codex` 时才使用旧式 Codex agent 任务文档 |
+| `.\run_business.ps1 [-llmOnly] [-codex] [-NoPublish]` | 商业日报流程：默认直接运行 Python 主流程，生成后更新 `github_pages_site` 并推送 GitHub Pages；带 `-NoPublish` 时只生成不发布；带 `-llmOnly` 时复用 `output/raw_articles.json`；带 `-codex` 时才使用旧式 Codex agent 任务文档 |
+| `.\run_tech.ps1 [-codex] [-NoPublish]` | 技术周报流程：默认直接运行 Python 主流程，生成后更新 `github_pages_site` 并推送 GitHub Pages；带 `-NoPublish` 时只生成不发布；带 `-codex` 时才使用旧式 Codex agent 任务文档 |
 | `info-com [-codex]` | PowerShell 快捷入口：商业日报完整流程，含 Python 爬虫；带 `-codex` 时改用 Codex |
 | `info-semi-com [-codex]` | PowerShell 快捷入口：商业日报后半程，复用已有 `raw_articles.json`；带 `-codex` 时改用 Codex |
+| `python -m webgui` / `.\run_gui.ps1` | 本地控制台 GUI（默认 `127.0.0.1:5000`）：控制台（信息源/阈值/词库/Prompt 编辑 + 一键运行 + SSE 实时日志）· 评审看板（1–10 人工评分/标记/备注）· 导出分享（微信图文/独立网页/Markdown/剪贴板）· 洞察（改词试评分/源健康度/运行历史） |
 
 未配置真实 `ANTHROPIC_API_KEY` 时不报错：analyzer 自动降级为关键词规则评分 + 截断式摘要，可离线调试版式。
 
@@ -50,7 +51,13 @@
 | `reporter.py` | `save_report()` 渲染 HTML/JSON：商业 `_build_tag_sections`、技术 `_build_category_sections` + digest + 附录；图片失败降级分类 SVG |
 | `main.py` | 入口：`--report` 分流、seen 记录、时效窗口选择；启动时 `os.chdir` 到脚本目录以兼容计划任务 |
 | `crawl_only.py` | 无 LLM 纯爬虫入口 |
-| `publish_pages.ps1` | 将 `output/` 中最新商业日报/技术周报 HTML 复制到 `github_pages_site/reports/`，重建 Pages 首页，提交并推送，最后打印分享链接 |
+| `publish_pages.ps1` | 将 `output/` 中最新商业日报/技术周报 HTML 复制到 `github_pages_site/reports/`，重建静态站点首页，提交并推送 GitHub Pages |
+| `settings_store.py` | GUI 配置覆盖层：读写 `data/gui_settings.json`，`apply_overrides()` 在 `config.py` 末尾合并；手动运行/计划任务/GUI 三者共用同一份设置 |
+| `ratings_store.py` | 人工评分存储：按文章 URL 主键存 `data/ratings.json`（1–10 分/标记/备注 + 快照），并发写加锁 |
+| `wechat_render.py` | 导出渲染：微信图文（全内联样式、无 `class`/`<style>`）+ Markdown/剪贴板文本 |
+| `webgui/` | 轻量 Flask 控制台：`app.py`（路由 + SSE 运行日志 + 单运行锁 + 看板/导出/洞察 API）、`templates/`、`static/`；复用上述模块、不分叉流水线 |
+
+> GUI 通过「配置覆盖层」喂参数复用现有流水线，不复制评分/渲染逻辑；§8「每条引导性追问」由 `config.ARTICLE_FOLLOWUP_PROMPT` 随摘要产出 `followup_question`，报告卡片与看板均渲染。`data/` 为运行态（已 gitignore）。
 
 ## 信息源（在 `config.py` 增删）
 

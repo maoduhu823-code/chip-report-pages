@@ -47,4 +47,26 @@
 
 > **注**：`reporter.py` 含工作区既有的非本任务改动（tier 徽章/响应式/图片兜底约 97 行）。§8 的卡片追问渲染（CARD_TEMPLATE 槽位 + `_build_card` + `.followup` 样式）已写入 reporter.py 但**未随本批提交**，以免把既有 WIP 卷入；请单独 review 后提交 reporter.py。
 >
-> 阶段6（增值交互：试评分预览 / 分歧视图 / 运行历史 / 源健康度）待续。
+## 2026-06-20 · 阶段6：增值交互 + 已处理列表编辑 + 文档收尾
+
+### 洞察页（新 `/insights` + nav 入口）
+- **改词试评分** `/api/rescore`：用关键词兜底对 `raw_articles.json` 即时重打分（不调 LLM、不重爬、不写文件），直接反映 GUI 刚保存的关键词词库改动；每条展示命中了哪些桶里的哪些词（实现「关键词命中高亮」）+ 是否达阈值/进 Top-N。
+- **信息源健康度** `/api/source_health`：各源启用状态 + 全部报告累计产出，启用但 0 产出标 warn；附 crawl.log/run.log 尾部 WARNING/ERROR。
+- **运行历史** `/api/history`：各报告收录/候选/执行器/调用数/Token/费用，日期可跳看板。
+- **AI×人工分歧**：已由评审看板「分歧」筛选覆盖（AI 与人工分差 ≥3 高亮），不再单设页面。
+
+### 已处理列表（防重复 seen-URL）编辑（用户新增需求）
+- 痛点：对某条新闻的生成效果不满意、想重新生成时，需把它移出 `seen_<slug>.json`，下次运行才会重新处理。
+- `/api/seen`（按 slug 列出，跨报告补 title/source/date）+ `/api/seen/delete`（移除选中，加锁）；slug 白名单校验。
+- 洞察页「♻️ 已处理列表」区：slug 切换 + 搜索 + 多选 + 删除；**评审看板每卡新增「♻️ 重新生成」**按钮，一键把该条移出对应 seen（最贴合「看到差结果就重生成」的动线）。
+
+### 文档收尾
+- `CLAUDE.md` 命令表加 GUI 入口（`python -m webgui` / `run_gui.ps1`），文件结构表补 `settings_store.py`/`ratings_store.py`/`wechat_render.py`/`webgui/`，并加覆盖层/§8/`data/` 说明。
+
+### 验证
+- 三 API + seen 读写全过（测试 client）；浏览器实测洞察页历史 7 行、源健康 22 源(6 warn)、试评分 44 条(25 达阈值, 命中词高亮)、seen 列表 44 条(搜索/全选/删除)，看板「重新生成」点击后 seen 44→43、按钮转「已移出」。
+- seen 真实删除经备份→改→复原；core 模块 import + `create_app` OK。
+
+> **注**：`reporter.py`（§8 卡片追问渲染）与 `CLAUDE.md`（3 行既有措辞微调）在工作区含本任务之外的既有改动。本批提交**包含 CLAUDE.md**（仅 3 行无害微调随行），但**仍不含 reporter.py**（97 行既有 WIP），其 §8 渲染留在工作区待用户单独 review 提交。
+>
+> GUI 全部阶段（1-6）+ 已处理列表编辑完成。
