@@ -19,6 +19,7 @@ const PROMPT_META = [
   { key: "BUSINESS_EXECUTIVE_SUMMARY_PROMPT", label: "商业版 · 动态概览" },
   { key: "TECH_WEEKLY_DIGEST_PROMPT", label: "技术版 · 本周讯息总结" },
   { key: "TRANSLATION_PROMPT", label: "英文翻译" },
+  { key: "ARTICLE_FOLLOWUP_PROMPT", label: "每条新闻 · 引导性追问人设" },
 ];
 
 let S = JSON.parse(document.getElementById("settings-data").textContent);

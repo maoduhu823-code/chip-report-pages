@@ -23,4 +23,28 @@
 - 浏览器实操：17 卡渲染、打分/标记/备注/筛选/分歧高亮/统计均正确；复刻「flag+分数快速连点」竞态，修复后服务端两者都正确持久化（此前会丢分）。
 - 回归：core 模块全部 import OK，配置覆盖层快照正常；未改动 analyzer/reporter/main/config 逻辑。
 
-> 阶段1-2（配置覆盖层 + 控制面板）已在上一提交完成。阶段5-6（四格式导出 + 周报挑选 + 每条引导性追问 + 增值交互）待续。
+> 阶段1-2（配置覆盖层 + 控制面板）已在更早提交完成。
+
+## 2026-06-20 · 阶段5：四格式导出 + 周报挑选 + 每条引导性追问
+
+### 每条新闻引导性追问（§8）
+- `config.py` 新增 `ARTICLE_FOLLOWUP_PROMPT`（可在 GUI Prompt 编辑器改人设）；`analyzer.generate_summary` 把它追加到摘要 system prompt 末尾，随摘要一并产出 `followup` 字段（**零额外 LLM 调用**），`_build_result` 写 `followup_question`，`_fallback_summary` 兜底为 `""`。
+- `reporter.CARD_TEMPLATE` 加追问行（商业平铺卡 + 技术分类卡都渲染）；`settings_store.OVERRIDABLE_PROMPTS` 与 `control.js` PROMPT_META 收录该人设；看板 `/api/report` + `dashboard.js` 也展示。
+
+### 四格式导出
+- 新增 `wechat_render.py`：`render_wechat`（公众号图文，**全内联 style、无 `<style>`/`class`**、base64 内嵌图、阅读全文链接）+ `render_markdown`（也用作剪贴板文本）。
+- `webgui/app.py`：`/api/export/preview`（按范围预览子集）、`/api/export`（微信/独立网页[复用 `reporter.save_report`]/Markdown/剪贴板四格式）、`/api/export/open`（浏览器打开产物，文件名白名单防穿越）。
+- `export.html` + `export.js` 替换占位页：选报告 + 范围(分享/我评分≥N/全部) + 格式勾选 + 预览 + 导出结果链接/复制。
+
+### 周报从人工评分挑 Top-N
+- `/api/weekly_from_ratings`：取近 N 天 `human_score` 最高的 Top-N，按 slug+date 回源报告取完整文章，非技术门类归「其他技术」防分组丢条目，直接 `reporter.save_report(report_type="tech")` 渲染（跳过爬取与 AI 评分）。
+
+### 验证
+- §8：reporter 卡片有/无追问分别渲染/省略；看板卡片 `.rfollowup` 渲染（浏览器实测）；真实 DeepSeek 调用确认能产出中文追问，无 LLM 时兜底 `""`。
+- 导出：预览计数正确（shared 3 / rated≥8 2 条）；四格式全产出；微信 HTML 经校验无 `<style>`/`class=`、有内联 `style=` 与阅读全文；`/api/export/open` 拦截 `../config.py`、`raw_articles.json`（400）。
+- 周报：从评分生成 Top-N 技术周报，`open` 返回 HTML 含标题。
+- 回归：core 模块全部 import + `create_app` OK；测试产物与评分已清理，`output/` 复原。
+
+> **注**：`reporter.py` 含工作区既有的非本任务改动（tier 徽章/响应式/图片兜底约 97 行）。§8 的卡片追问渲染（CARD_TEMPLATE 槽位 + `_build_card` + `.followup` 样式）已写入 reporter.py 但**未随本批提交**，以免把既有 WIP 卷入；请单独 review 后提交 reporter.py。
+>
+> 阶段6（增值交互：试评分预览 / 分歧视图 / 运行历史 / 源健康度）待续。

@@ -135,6 +135,7 @@ function cardNode(a) {
   body.appendChild(el("h3", {}, [el("a", { href: a.url, target: "_blank", rel: "noopener" }, a.title || "（无标题）")]));
   if (a.summary) body.appendChild(el("p", { class: "rsum" }, a.summary));
   body.appendChild(metaRow(a));
+  if (a.followup) body.appendChild(el("div", { class: "rfollowup" }, "🤔 分析师追问：" + a.followup));
   body.appendChild(rateRow(a, card));
   body.appendChild(flagRow(a, card));
 

@@ -21,7 +21,7 @@ import re
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 # 把工程根加入 sys.path，保证从任意 cwd 启动都能 import 根模块
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +36,7 @@ import settings_store  # noqa: E402
 import ratings_store  # noqa: E402
 import config  # noqa: E402
 import reporter  # noqa: E402
+import wechat_render  # noqa: E402
 
 OUTPUT_DIR = os.path.join(_ROOT, "output")
 
@@ -131,6 +132,7 @@ def _slim_article(name: str, i: int, a: dict) -> dict:
         "keywords": a.get("keywords", ""),
         "tags": a.get("tags", ""),
         "category": a.get("category", ""),
+        "followup": a.get("followup_question", ""),
         "img": f"/api/img?file={name}&i={i}",
     }
 
@@ -139,6 +141,76 @@ def _category_svg_bytes(article: dict) -> tuple[bytes, str]:
     cat = article.get("category") or ("行业商业" if article.get("tags") else "其他")
     svg = reporter._CATEGORY_SVG.get(cat, reporter._CATEGORY_SVG["其他"])
     return svg.encode("utf-8"), "image/svg+xml"
+
+
+# ============================================================
+# 导出子集 + 周报挑选（阶段5）
+# ============================================================
+
+# 生成的导出物文件名白名单（防路径穿越；供 /api/export/open 校验）
+_EXPORT_NAME_RE = re.compile(r"^(share|wechat|export|weekly)_[\w\-]+\.(html|md)$")
+
+
+def _rating_file_for(entry: dict) -> str | None:
+    """由 rating 快照里的 slug+date 反推其来源报告 basename。"""
+    slug, dt = entry.get("slug"), entry.get("date")
+    if slug not in ("business", "tech") or not dt:
+        return None
+    prefix = "daily" if slug == "business" else "weekly"
+    return f"{prefix}_{dt}_{slug}"
+
+
+def _full_article_by_url(file: str, url: str) -> dict | None:
+    rep = _load_report(file)
+    if not rep:
+        return None
+    for a in rep.get("articles", []):
+        if a.get("url") == url:
+            return a
+    return None
+
+
+def _export_subset(file: str, scope: str, min_score: int, urls: list) -> tuple[dict | None, list[dict]]:
+    """按范围从某报告挑出文章子集，并并入人工评分(human_score)/备注(note)。"""
+    rep = _load_report(file)
+    if rep is None:
+        return None, []
+    ratings = ratings_store.load()
+    want = set(urls or [])
+    out: list[dict] = []
+    for a in rep.get("articles", []):
+        r = ratings.get(a.get("url"), {})
+        hs = r.get("human_score")
+        flags = r.get("flags", []) or []
+        if scope == "all":
+            keep = True
+        elif scope == "rated_min":
+            keep = isinstance(hs, int) and hs >= min_score
+        elif scope == "shared":
+            keep = "分享" in flags
+        elif scope == "manual":
+            keep = a.get("url") in want
+        else:
+            keep = False
+        if not keep:
+            continue
+        merged = dict(a)
+        if isinstance(hs, int):
+            merged["human_score"] = hs
+        if r.get("note"):
+            merged["note"] = r["note"]
+        out.append(merged)
+    # 导出排序：先我的分（无则 -1），再 AI 分
+    out.sort(key=lambda x: (x.get("human_score", -1), x.get("score", 0)), reverse=True)
+    return rep, out
+
+
+def _write_output(name: str, text: str) -> dict:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(OUTPUT_DIR, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return {"name": name, "path": os.path.abspath(path), "open": f"/api/export/open?name={name}"}
 
 
 # ============================================================
@@ -410,12 +482,147 @@ def create_app() -> Flask:
         entry = ratings_store.upsert(url, payload)
         return jsonify({"ok": True, "entry": entry})
 
-    # ── 占位路由（阶段5 填充）─────────────────────────────────
+    # ── 导出分享（阶段5）──────────────────────────────────────
     @app.route("/export")
     def export_page():
-        return render_template(
-            "placeholder.html", active="export", title="导出分享",
-            note="阶段5 实现：微信图文 HTML · 独立分享网页(走 Pages) · Markdown/纯文本 · 复制剪贴板。",
+        return render_template("export.html", active="export")
+
+    @app.get("/api/export/preview")
+    def api_export_preview():
+        """返回某报告在给定范围下会导出的条目，供 UI 预览。"""
+        file = request.args.get("file", "")
+        scope = request.args.get("scope", "shared")
+        try:
+            min_score = int(request.args.get("min_score", "7"))
+        except ValueError:
+            min_score = 7
+        rep, subset = _export_subset(file, scope, min_score, [])
+        if rep is None:
+            return jsonify({"ok": False, "error": "报告不存在"}), 404
+        items = [{
+            "url": a.get("url", ""), "title": a.get("title", ""),
+            "source": a.get("source", ""), "score": a.get("score"),
+            "human_score": a.get("human_score"),
+        } for a in subset]
+        return jsonify({"ok": True, "count": len(items), "items": items})
+
+    @app.post("/api/export")
+    def api_export():
+        p = request.get_json(force=True, silent=True) or {}
+        file = p.get("file", "")
+        scope = p.get("scope", "shared")
+        formats = p.get("formats", []) or []
+        try:
+            min_score = int(p.get("min_score", 7) or 7)
+        except (TypeError, ValueError):
+            min_score = 7
+        rep, subset = _export_subset(file, scope, min_score, p.get("urls", []))
+        if rep is None:
+            return jsonify({"ok": False, "error": "报告不存在或文件名非法"}), 404
+        if not subset:
+            return jsonify({"ok": False, "error": "所选范围内没有条目"}), 400
+
+        m = _REPORT_NAME_RE.match(file)
+        kind, dt = m.group(3), m.group(2)
+        title = ("商业动态精选" if kind == "business" else "技术周报精选") + f" · {dt}"
+        today = datetime.now().strftime("%Y-%m-%d")
+        results: dict[str, dict] = {}
+
+        if "markdown" in formats:
+            md = wechat_render.render_markdown(subset, title)
+            results["markdown"] = _write_output(f"export_{today}_{kind}.md", md)
+        if "clipboard" in formats:
+            results["clipboard"] = {"text": wechat_render.render_markdown(subset, title)}
+        if "wechat" in formats:
+            html = wechat_render.render_wechat(subset, title)
+            results["wechat"] = _write_output(f"wechat_{today}_{kind}.html", html)
+        if "share_html" in formats:
+            # 复用正式报告渲染：同款样式与配图（save_report 会就地解析图片）
+            path = reporter.save_report(
+                [dict(a) for a in subset],
+                rep.get("executive_summary", ""),
+                rep.get("sources", []),
+                report_type=kind, report_slug=kind, report_title=title,
+                metadata=rep.get("metadata"), file_prefix_word="share",
+            )
+            base = os.path.basename(path)
+            results["share_html"] = {
+                "name": base, "path": os.path.abspath(path),
+                "open": f"/api/export/open?name={base}",
+                "hint": "样式与正式报告一致；如需可分享链接，运行 publish_pages.ps1 发布到 Pages",
+            }
+        return jsonify({"ok": True, "count": len(subset), "results": results})
+
+    @app.get("/api/export/open")
+    def api_export_open():
+        """在浏览器打开生成的导出物（html 直接渲染，md 以纯文本）。"""
+        name = request.args.get("name", "")
+        if not _EXPORT_NAME_RE.match(name):
+            return Response("非法文件名", status=400)
+        path = os.path.join(OUTPUT_DIR, name)
+        if not os.path.isfile(path):
+            return Response("文件不存在", status=404)
+        with open(path, encoding="utf-8") as f:
+            body = f.read()
+        # Flask 会为 text/* mimetype 自动补 charset=utf-8，这里不要再手写以免重复
+        return Response(body, mimetype="text/html" if name.endswith(".html") else "text/plain")
+
+    @app.post("/api/weekly_from_ratings")
+    def api_weekly_from_ratings():
+        """从近 N 天的人工评分里取最高分 Top-N，直接渲染技术周报（跳过爬取与 AI 评分）。"""
+        p = request.get_json(force=True, silent=True) or {}
+        try:
+            top_n = int(p.get("top_n") or config.TECH_TOP_N)
+            days = int(p.get("days") or 7)
+        except (TypeError, ValueError):
+            top_n, days = config.TECH_TOP_N, 7
+
+        cutoff = date.today() - timedelta(days=days)
+        cands = []
+        for url, r in ratings_store.load().items():
+            hs = r.get("human_score")
+            if not isinstance(hs, int):
+                continue
+            dt = r.get("date")
+            try:
+                if dt and date.fromisoformat(dt) < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass
+            cands.append((hs, r))
+        cands.sort(key=lambda x: x[0], reverse=True)
+        cands = cands[:top_n]
+        if not cands:
+            return jsonify({"ok": False, "error": f"近 {days} 天没有已评分的条目"}), 400
+
+        results = []
+        for rank, (hs, r) in enumerate(cands, 1):
+            src_file = _rating_file_for(r)
+            full = _full_article_by_url(src_file, r.get("url")) if src_file else None
+            art = dict(full) if full else {
+                "url": r.get("url", ""), "title": r.get("title", ""), "summary": "",
+                "source": r.get("source", ""), "keywords": "", "image_url": "",
+                "language": "zh", "tier": "media", "pub_date": r.get("date", ""),
+            }
+            art["rank"] = rank
+            art["human_score"] = hs
+            art["score"] = art.get("score") or r.get("ai_score") or 0
+            art["weighted_score"] = art.get("weighted_score") or art["score"]
+            # 保证落在技术门类内，否则归「其他技术」，避免按门类分组时丢条目
+            if art.get("category") not in config.TECH_CATEGORIES:
+                art["category"] = "其他技术"
+            results.append(art)
+
+        title = f"半导体技术周报 · 人工精选 Top {len(results)}"
+        path = reporter.save_report(
+            results, executive_summary="", site_names=[],
+            report_type="tech", report_slug="tech-handpick", report_title=title,
+            file_prefix_word="weekly", metadata={"ai_executor": "人工精选"},
         )
+        base = os.path.basename(path)
+        return jsonify({
+            "ok": True, "count": len(results), "name": base,
+            "path": os.path.abspath(path), "open": f"/api/export/open?name={base}",
+        })
 
     return app

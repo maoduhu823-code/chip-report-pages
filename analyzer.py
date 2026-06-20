@@ -18,6 +18,7 @@ import requests
 
 import config
 from config import (
+    ARTICLE_FOLLOWUP_PROMPT,
     BUSINESS_EXECUTIVE_SUMMARY_PROMPT,
     BUSINESS_MIN_SCORE,
     BUSINESS_RELEVANCE_PROMPT,
@@ -401,6 +402,7 @@ def _fallback_summary(article: dict, report_type: str) -> dict:
         "title": title[:60],
         "summary": summary,
         "keywords": keywords,
+        "followup": "",   # 兜底无 LLM，不产出追问，避免阻断版式
     }
 
 
@@ -571,7 +573,9 @@ def _translate_article(article: dict) -> dict:
 
 def generate_summary(article: dict, report_type: str) -> dict:
     """为单篇文章生成精炼标题、摘要和关键词（中文输出）。英文原文直接生成中文摘要。"""
-    prompt = BUSINESS_SUMMARY_PROMPT if report_type == "business" else TECH_SUMMARY_PROMPT
+    base_prompt = BUSINESS_SUMMARY_PROMPT if report_type == "business" else TECH_SUMMARY_PROMPT
+    # 追加「引导性追问」人设，随摘要一并产出 followup 字段（§8，零额外调用）
+    prompt = base_prompt + "\n" + ARTICLE_FOLLOWUP_PROMPT
     text_limit = 600 if report_type == "business" else 1500
     user_content = f"原始标题：{article['title']}\n\n正文：{article['text'][:text_limit]}"
     response = _call_llm(prompt, user_content, max_tokens=768, model="haiku", prefer_json=True)
@@ -586,10 +590,12 @@ def generate_summary(article: dict, report_type: str) -> dict:
             title = str(data.get("title", article["title"])).strip() or article["title"]
             if not _has_cjk(title) and _has_cjk(article.get("title", "")):
                 title = article["title"]
+            followup = str(data.get("followup", "")).strip()
             return {
                 "title": title,
                 "summary": summary,
                 "keywords": data.get("keywords", ""),
+                "followup": followup if _has_cjk(followup) else "",
             }
         except (json.JSONDecodeError, KeyError):
             logger.warning(f"  摘要解析失败，使用兜底摘要: {article['title'][:30]}")
@@ -666,6 +672,7 @@ def _build_result(article: dict, rank: int, report_type: str) -> dict:
         "title": summary_data["title"],
         "summary": summary_data["summary"],
         "keywords": summary_data["keywords"],
+        "followup_question": summary_data.get("followup", ""),   # §8 每条引导性追问
     }
 
     if report_type == "business":
