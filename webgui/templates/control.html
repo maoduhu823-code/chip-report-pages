@@ -11,6 +11,30 @@
 
 <p class="hint">改动保存后写入 <code>data/gui_settings.json</code>，对手动运行、计划任务、本控制台触发的运行三者同时生效。</p>
 
+<section class="card run-card">
+  <h2 class="card-h">▶️ 运行流水线 <span class="muted">（子进程继承上面的设置；同一时刻只允许一个运行）</span></h2>
+  <div class="run-controls">
+    <div class="run-field">
+      <label for="run-report">报告类型</label>
+      <select id="run-report">
+        <option value="business">商业日报</option>
+        <option value="tech">技术周报</option>
+      </select>
+    </div>
+    <div class="run-field">
+      <label for="run-mode">运行方式</label>
+      <select id="run-mode">
+        <option value="full">完整（爬取 + 评分）</option>
+        <option value="llmOnly">仅评分（复用 raw_articles.json）</option>
+      </select>
+    </div>
+    <button id="btn-run" class="btn btn-primary" type="button">▶ 开始运行</button>
+    <span id="run-status" class="run-status"></span>
+    <a id="run-goto" class="run-goto" href="#" hidden>→ 在评审看板查看</a>
+  </div>
+  <pre id="run-log" class="run-log" hidden></pre>
+</section>
+
 <section class="card">
   <h2 class="card-h">⚙️ 运行变量</h2>
   <div id="vars-grid" class="vars-grid"></div>
@@ -48,4 +72,5 @@
 {% block scripts %}
 <script id="settings-data" type="application/json">{{ settings|tojson }}</script>
 <script src="{{ url_for('static', filename='control.js') }}"></script>
+<script src="{{ url_for('static', filename='run.js') }}"></script>
 {% endblock %}

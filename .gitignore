@@ -9,8 +9,12 @@ output/
 run.log
 crawl.log
 
+# GUI local settings + human ratings (runtime state)
+data/
+
 # Local publish repository for GitHub Pages
 github_pages_site/
+deploy/
 
 # Python cache and virtual environments
 __pycache__/

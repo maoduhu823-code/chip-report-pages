@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}评审看板 — 芯片资讯{% endblock %}
+{% block content %}
+<div class="actionbar">
+  <div class="actionbar-title">评审看板</div>
+  <div class="actionbar-btns">
+    <select id="report-select" class="select"></select>
+    <button id="btn-refresh" class="btn btn-ghost" type="button">刷新</button>
+  </div>
+</div>
+
+<p class="hint">给每条新闻打 <b>1–10</b> 人工分、加快捷标记、写备注，改动自动保存到
+<code>data/ratings.json</code>（按文章 URL 主键，跨报告/跨天稳定）。AI 相关度与我的评分并排，分歧条目高亮。</p>
+
+<section class="card dash-toolbar">
+  <div class="tb-group" id="filter-group">
+    <span class="tb-label">筛选</span>
+    <button class="chip-btn active" data-filter="all" type="button">全部</button>
+    <button class="chip-btn" data-filter="rated" type="button">已评</button>
+    <button class="chip-btn" data-filter="unrated" type="button">未评</button>
+    <button class="chip-btn" data-filter="share" type="button">已标分享</button>
+    <button class="chip-btn" data-filter="diverge" type="button">AI/人工分歧</button>
+  </div>
+  <div class="tb-group">
+    <span class="tb-label">排序</span>
+    <select id="sort-select" class="select">
+      <option value="ai">AI 相关度 ↓</option>
+      <option value="human">我的评分 ↓</option>
+      <option value="rank">报告排名</option>
+      <option value="source">来源</option>
+    </select>
+  </div>
+  <input id="search-box" class="search-box" type="search" placeholder="搜索标题 / 来源 / 关键词…">
+  <span class="tb-stat" id="board-stat"></span>
+</section>
+
+<div id="board" class="board"></div>
+<div id="board-empty" class="board-empty" hidden>
+  暂无报告。先到「<a href="/">控制台</a>」运行一次，或确认 <code>output/</code> 下存在报告 JSON。
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+{% endblock %}
