@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}芯片资讯控制台{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="brand-icon">🔬</span> 芯片资讯控制台</div>
+    <nav class="nav">
+      <a href="/" class="nav-link {{ 'active' if active=='control' else '' }}">控制台</a>
+      <a href="/dashboard" class="nav-link {{ 'active' if active=='dashboard' else '' }}">评审看板</a>
+      <a href="/export" class="nav-link {{ 'active' if active=='export' else '' }}">导出分享</a>
+    </nav>
+  </div>
+</header>
+<main class="page">
+  {% block content %}{% endblock %}
+</main>
+<div id="toast" class="toast" hidden></div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

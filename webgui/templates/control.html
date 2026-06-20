@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}控制台 — 芯片资讯{% endblock %}
+{% block content %}
+<div class="actionbar">
+  <div class="actionbar-title">运行参数控制台</div>
+  <div class="actionbar-btns">
+    <button id="btn-reset" class="btn btn-ghost" type="button">重置为默认</button>
+    <button id="btn-save" class="btn btn-primary" type="button">保存设置</button>
+  </div>
+</div>
+
+<p class="hint">改动保存后写入 <code>data/gui_settings.json</code>，对手动运行、计划任务、本控制台触发的运行三者同时生效。</p>
+
+<section class="card">
+  <h2 class="card-h">⚙️ 运行变量</h2>
+  <div id="vars-grid" class="vars-grid"></div>
+</section>
+
+<section class="card">
+  <h2 class="card-h">📡 信息源 <span class="muted" id="src-summary"></span></h2>
+  <div class="src-tools">
+    <button class="chip-btn" data-bulk="all" type="button">全选</button>
+    <button class="chip-btn" data-bulk="none" type="button">全不选</button>
+    <button class="chip-btn" data-bulk="invert" type="button">反选</button>
+  </div>
+  <h3 class="sub-h">RSS 订阅源</h3>
+  <div id="rss-list" class="src-list"></div>
+  <h3 class="sub-h">HTML 爬取站点</h3>
+  <div id="html-list" class="src-list"></div>
+</section>
+
+<section class="card">
+  <h2 class="card-h">🏷️ 关键词词库 <span class="muted">（规则兜底评分/分类用；可被 LLM 评分覆盖）</span></h2>
+  <div class="tabs" id="kb-tabs">
+    <button class="tab active" data-tab="tech" type="button">技术分类</button>
+    <button class="tab" data-tab="business" type="button">商业标签</button>
+  </div>
+  <div id="kb-tech" class="kb-pane"></div>
+  <div id="kb-business" class="kb-pane" hidden></div>
+</section>
+
+<section class="card">
+  <h2 class="card-h">✍️ Prompt 高级编辑 <span class="muted">（懂 prompt 写法再改；留空=用代码默认）</span></h2>
+  <div id="prompts-list"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script id="settings-data" type="application/json">{{ settings|tojson }}</script>
+<script src="{{ url_for('static', filename='control.js') }}"></script>
+{% endblock %}

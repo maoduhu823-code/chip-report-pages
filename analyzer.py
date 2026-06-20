@@ -16,6 +16,7 @@ from difflib import SequenceMatcher
 
 import requests
 
+import config
 from config import (
     BUSINESS_EXECUTIVE_SUMMARY_PROMPT,
     BUSINESS_MIN_SCORE,
@@ -36,6 +37,7 @@ from config import (
     TECH_SUMMARY_PROMPT,
     TECH_TOP_N,
     TECH_WEEKLY_DIGEST_PROMPT,
+    TIER_PRIORITY,
     TRANSLATION_PROMPT,
 )
 
@@ -47,11 +49,14 @@ LLM_USAGE = {
     "models": {},
     "calls": 0,
     "input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
     "output_tokens": 0,
     "total_tokens": 0,
     "captured_token_calls": 0,
     "token_unit": "tokens",
     "token_source": "runtime",
+    "cost_usd": 0.0,
 }
 
 
@@ -62,11 +67,14 @@ def reset_llm_usage() -> None:
         "models": {},
         "calls": 0,
         "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
         "captured_token_calls": 0,
         "token_unit": "tokens",
         "token_source": "runtime",
+        "cost_usd": 0.0,
     })
 
 
@@ -75,12 +83,51 @@ def get_llm_usage_metadata() -> dict:
     metadata["models"] = dict(LLM_USAGE["models"])
     if metadata.get("captured_token_calls", 0) == 0:
         metadata["input_tokens"] = None
+        metadata["cache_creation_input_tokens"] = None
+        metadata["cache_read_input_tokens"] = None
         metadata["output_tokens"] = None
         metadata["total_tokens"] = None
+        metadata["cost_usd"] = None
     return metadata
 
 
-def _record_llm_usage(provider: str, model: str, usage: dict | None) -> None:
+def _normalize_deepseek_usage(usage: dict) -> dict:
+    input_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+    output_tokens = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
+    total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
+    return {
+        "input_tokens": input_tokens,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cost_usd": 0.0,
+    }
+
+
+def _normalize_claude_usage(usage: dict, result_data: dict | None = None) -> dict:
+    base_input = int(usage.get("input_tokens", 0) or 0)
+    cache_creation = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    billed_input = base_input + cache_creation + cache_read
+    cost_usd = 0.0
+    if result_data:
+        try:
+            cost_usd = float(result_data.get("total_cost_usd", 0) or 0)
+        except (TypeError, ValueError):
+            cost_usd = 0.0
+    return {
+        "input_tokens": billed_input,
+        "cache_creation_input_tokens": cache_creation,
+        "cache_read_input_tokens": cache_read,
+        "output_tokens": output_tokens,
+        "total_tokens": billed_input + output_tokens,
+        "cost_usd": cost_usd,
+    }
+
+
+def _record_llm_usage(provider: str, model: str, usage: dict | None, result_data: dict | None = None) -> None:
     LLM_USAGE["provider"] = provider
     LLM_USAGE["ai_executor"] = f"{provider} API" if provider == "DeepSeek" else provider
     LLM_USAGE["calls"] += 1
@@ -89,13 +136,18 @@ def _record_llm_usage(provider: str, model: str, usage: dict | None) -> None:
     if not usage:
         return
 
+    if provider == "DeepSeek":
+        normalized = _normalize_deepseek_usage(usage)
+    elif provider == "Claude Code":
+        normalized = _normalize_claude_usage(usage, result_data)
+    else:
+        normalized = _normalize_deepseek_usage(usage)
+
     LLM_USAGE["captured_token_calls"] += 1
-    input_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
-    output_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
-    total_tokens = usage.get("total_tokens", input_tokens + output_tokens) or 0
-    LLM_USAGE["input_tokens"] += int(input_tokens)
-    LLM_USAGE["output_tokens"] += int(output_tokens)
-    LLM_USAGE["total_tokens"] += int(total_tokens)
+    for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+                "output_tokens", "total_tokens"):
+        LLM_USAGE[key] += int(normalized.get(key, 0) or 0)
+    LLM_USAGE["cost_usd"] += float(normalized.get("cost_usd", 0.0) or 0.0)
 
 
 # ============================================================
@@ -142,7 +194,10 @@ def _build_claude_cmd(model: str, system_prompt: str) -> list[str]:
     """构造 claude CLI 调用命令，返回可直接传入 subprocess.run 的列表。"""
     claude_exe = _resolve_claude_exe()
     model_id = CLAUDE_SONNET_MODEL if model == "sonnet" else CLAUDE_HAIKU_MODEL if model == "haiku" else model
-    return [claude_exe, "--print", "--model", model_id, "--system-prompt", system_prompt, "--tools", ""]
+    return [
+        claude_exe, "--print", "--output-format", "json",
+        "--model", model_id, "--system-prompt", system_prompt, "--tools", "",
+    ]
 
 
 def _call_claude_cli(system_prompt: str, user_content: str, max_tokens: int = 256,
@@ -167,7 +222,15 @@ def _call_claude_cli(system_prompt: str, user_content: str, max_tokens: int = 25
                 timeout=120,
             )
         if result.returncode == 0:
-            return result.stdout.strip()
+            raw_output = result.stdout.strip()
+            try:
+                data = json.loads(raw_output)
+                model_id = CLAUDE_SONNET_MODEL if model == "sonnet" else CLAUDE_HAIKU_MODEL if model == "haiku" else model
+                _record_llm_usage("Claude Code", model_id, data.get("usage"), data)
+                return str(data.get("result", "")).strip()
+            except json.JSONDecodeError:
+                logger.warning(f"claude CLI JSON解析失败，使用原始输出: {raw_output[:120]}")
+                return raw_output
         logger.error(f"claude CLI rc={result.returncode}: {result.stderr[:200]}")
         return ""
     except subprocess.TimeoutExpired:
@@ -194,6 +257,7 @@ def _call_deepseek_api(system_prompt: str, user_content: str, max_tokens: int = 
                        model: str = "haiku", prefer_json: bool = False) -> str:
     """通过 DeepSeek OpenAI-compatible Chat Completions API 调用模型。"""
     if not DEEPSEEK_API_KEY:
+        logger.warning("DeepSeek API Key 未配置（DEEPSEEK_API_KEY 环境变量为空）")
         return ""
 
     url = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
@@ -243,11 +307,15 @@ def _call_llm(system_prompt: str, user_content: str, max_tokens: int = 256,
             return response
         if provider == "deepseek":
             return ""
-        logger.info("DeepSeek 不可用，回退 Claude Code CLI")
+        # auto 模式：不自动切换，抛出异常要求用户明确决策
+        raise RuntimeError(
+            "DeepSeek 不可用，已停止运行。\n"
+            "原因见上方日志（Key 未配置 / API 请求失败 / 余额不足）。\n"
+            "若需改用 Claude Code CLI，请设置环境变量 LLM_PROVIDER=claude 后重新运行。"
+        )
 
+    # provider == "claude"：用户已明确选择 Claude Code CLI
     response = _call_claude_cli(system_prompt, user_content, max_tokens, model)
-    if response:
-        _record_llm_usage("Claude Code", CLAUDE_SONNET_MODEL if model == "sonnet" else CLAUDE_HAIKU_MODEL, None)
     return response
 
 
@@ -286,6 +354,30 @@ def _keyword_hits(blob: str, keywords: tuple[str, ...]) -> int:
     return sum(1 for kw in keywords if kw.lower() in blob)
 
 
+def _has_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text or ""))
+
+
+def _looks_like_auth_boilerplate(text: str) -> bool:
+    lowered = str(text or "").lower()
+    tokens = (
+        "login", "sign up", "username", "password", "remember me",
+        "forgot password", "register", "email address",
+    )
+    return sum(1 for token in tokens if token in lowered) >= 3
+
+
+def _ensure_chinese_summary(article: dict, summary: str) -> str:
+    """报告面向中文读者；兜底文本不能把登录框/英文噪声直接带进报告。"""
+    summary = str(summary or "").strip()
+    title = str(article.get("title", "")).strip()
+    if summary and _has_cjk(summary) and not _looks_like_auth_boilerplate(summary):
+        return summary
+    if _has_cjk(title):
+        return f"正文提取异常，暂以原始标题判断：{title}"
+    return "摘要生成失败，未能获得有效中文正文。"
+
+
 def _fallback_summary(article: dict, report_type: str) -> dict:
     """CLI 调用失败时的轻量兜底摘要，方便测试报告版式。"""
     title = article.get("title", "").strip()
@@ -293,6 +385,7 @@ def _fallback_summary(article: dict, report_type: str) -> dict:
     summary = text[:300] if len(text) <= 300 else text[:297] + "..."
     if not summary:
         summary = title
+    summary = _ensure_chinese_summary(article, summary)
 
     blob = _article_blob(article)
     if report_type == "business":
@@ -318,17 +411,22 @@ def _fallback_summary(article: dict, report_type: str) -> dict:
 def deduplicate(articles: list[dict], threshold: float = DEDUP_SIMILARITY_THRESHOLD) -> list[dict]:
     """
     基于标题相似度跨源去重。
-    当两篇文章标题相似度 >= threshold 时，保留其中一篇（优先保留较长正文的版本）。
+    重复时优先保留层级更高的信源（官方公告 > 监管 > 行业组织 > 论文 > 媒体 > 聚合）；
+    同层级则保留正文更长的版本。
     """
     kept: list[dict] = []
     for article in articles:
         is_dup = False
-        for existing in kept:
+        for i, existing in enumerate(kept):
             sim = _title_similarity(article["title"], existing["title"])
             if sim >= threshold:
-                if len(article.get("text", "")) > len(existing.get("text", "")):
-                    kept.remove(existing)
-                    kept.append(article)
+                new_prio = TIER_PRIORITY.get(article.get("tier", "media"), 4)
+                old_prio = TIER_PRIORITY.get(existing.get("tier", "media"), 4)
+                if new_prio < old_prio or (
+                    new_prio == old_prio
+                    and len(article.get("text", "")) > len(existing.get("text", ""))
+                ):
+                    kept[i] = article   # 原地替换，保持发现顺序
                 is_dup = True
                 break
         if not is_dup:
@@ -346,29 +444,7 @@ def deduplicate(articles: list[dict], threshold: float = DEDUP_SIMILARITY_THRESH
 
 def _fallback_tech_score(article: dict) -> tuple[int, str]:
     blob = _article_blob(article)
-    buckets = {
-        "制造&工艺": (
-            "process", "node", "nm", "gaa", "nanosheet", "euv", "fab", "foundry",
-            "packaging", "advanced packaging", "cowos", "copos", "hbm", "yield",
-            "wafer", "test", "metrology", "封装", "制程", "工艺", "晶圆", "良率",
-            "设备", "材料", "测试",
-        ),
-        "芯片架构": (
-            "cpu", "gpu", "npu", "asic", "risc-v", "chiplet", "accelerator",
-            "architecture", "nvlink", "processor", "memory architecture",
-            "架构", "异构", "处理器", "加速器", "算力",
-        ),
-        "EDA工具": (
-            "eda", "synopsys", "cadence", "siemens", "verification", "simulation",
-            "place and route", "dft", "ip", "design automation", "agentic",
-            "验证", "仿真", "布局布线", "设计自动化",
-        ),
-        "标准&会议": (
-            "pcie", "ucie", "cxl", "ethernet", "standard", "isscc", "dac",
-            "iedm", "hot chips", "computex", "conference", "symposium",
-            "标准", "会议", "论坛", "大会",
-        ),
-    }
+    buckets = config.TECH_KEYWORD_BUCKETS  # 词库可被 GUI 覆盖，动态取最新值
 
     best_category = "其他技术"
     best_hits = 0
@@ -413,16 +489,7 @@ def score_tech_relevance(article: dict) -> tuple[int, str]:
 
 def _fallback_business_tags(article: dict) -> tuple[int, str]:
     blob = _article_blob(article)
-    buckets = {
-        "财报业绩": ("revenue", "earnings", "margin", "guidance", "profit", "sales", "财报", "营收", "利润", "指引", "业绩"),
-        "融资并购": ("funding", "ipo", "acquisition", "merger", "invest", "融资", "并购", "上市", "投资"),
-        "产能供应链": ("capacity", "supply", "fab", "shipment", "wafer", "shortage", "产能", "供应链", "扩产", "出货", "晶圆厂"),
-        "政策管制": ("export control", "tariff", "policy", "subsidy", "chips act", "管制", "政策", "补贴", "关税"),
-        "客户订单": ("customer", "order", "contract", "deal", "meta", "google", "nvidia", "amd", "客户", "订单", "合作"),
-        "市场价格": ("market", "price", "share", "forecast", "inventory", "市场", "价格", "份额", "预测", "库存"),
-        "公司战略": ("roadmap", "strategy", "partnership", "ecosystem", "战略", "路线图", "生态", "转型"),
-        "资本市场": ("stock", "shares", "sell-off", "rally", "valuation", "股价", "市值", "抛售", "反弹"),
-    }
+    buckets = config.BUSINESS_KEYWORD_BUCKETS  # 词库可被 GUI 覆盖，动态取最新值
 
     tag_hits: list[tuple[str, int]] = []
     for tag, keywords in buckets.items():
@@ -512,9 +579,16 @@ def generate_summary(article: dict, report_type: str) -> dict:
     if response:
         try:
             data = json.loads(_strip_json_md(response))
+            summary = str(data.get("summary", "")).strip()
+            if not _has_cjk(summary) or _looks_like_auth_boilerplate(summary):
+                logger.warning(f"  摘要非中文或疑似页面噪声，使用兜底摘要: {article['title'][:30]}")
+                return _fallback_summary(article, report_type)
+            title = str(data.get("title", article["title"])).strip() or article["title"]
+            if not _has_cjk(title) and _has_cjk(article.get("title", "")):
+                title = article["title"]
             return {
-                "title": data.get("title", article["title"]),
-                "summary": data.get("summary", ""),
+                "title": title,
+                "summary": summary,
                 "keywords": data.get("keywords", ""),
             }
         except (json.JSONDecodeError, KeyError):
@@ -583,6 +657,7 @@ def _build_result(article: dict, rank: int, report_type: str) -> dict:
         "score": article["score"],
         "weighted_score": article["weighted_score"],
         "source": article.get("source", ""),
+        "tier": article.get("tier", "media"),
         "language": article.get("language", "zh"),
         "url": article["url"],
         "image_url": article.get("image_url", ""),

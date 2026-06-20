@@ -30,46 +30,176 @@ CLAUDE_SONNET_MODEL = os.getenv("CLAUDE_SONNET_MODEL", "claude-sonnet-4-6")
 LLM_SCORING_BATCH_SIZE = int(os.getenv("LLM_SCORING_BATCH_SIZE", "40"))
 
 # ============================================================
+# 信源层级定义
+# ============================================================
+
+SOURCE_TIER_LABELS = {
+    "official":   "官方公告",
+    "regulatory": "监管披露",
+    "industry":   "行业组织",
+    "academic":   "会议论文",
+    "media":      "行业媒体",
+    "aggregator": "聚合转载",
+}
+
+# 去重时层级优先级（数值越小越优先保留）
+TIER_PRIORITY = {t: i for i, t in enumerate(
+    ["official", "regulatory", "industry", "academic", "media", "aggregator"]
+)}
+
+# ============================================================
 # 信息源配置
 # ============================================================
 
 # RSS 订阅源（自动解析，优先使用）
+# weight 权重倍率影响最终排名；tier 决定去重优先级和报告标注
 RSS_SOURCES = [
+    # ── 行业媒体（二手/深度解读层）────────────────────────────────────
     {
         "name": "EE Times",
         "url": "https://www.eetimes.com/feed/",
         "language": "en",
-        "weight": 1.0,   # 权重倍率，影响最终排名
+        "weight": 1.0,
+        "tier": "media",
     },
     {
         "name": "Semiconductor Engineering",
         "url": "https://semiengineering.com/feed/",
         "language": "en",
         "weight": 1.1,
+        "tier": "media",
     },
     {
         "name": "IEEE Spectrum",
         "url": "https://spectrum.ieee.org/feeds/feed.rss",
         "language": "en",
         "weight": 1.0,
+        "tier": "media",
     },
     {
         "name": "The Next Platform",
         "url": "https://www.nextplatform.com/feed/",
         "language": "en",
         "weight": 0.9,
+        "tier": "media",
     },
     {
         "name": "EDN Network",
         "url": "https://www.edn.com/feed/",
         "language": "en",
         "weight": 0.9,
+        "tier": "media",
     },
     {
         "name": "Electronic Design",
         "url": "https://www.electronicdesign.com/__rss/website-scheduled-content.xml?input=%7B%22sectionAlias%22:%22home%22%7D",
         "language": "en",
         "weight": 0.9,
+        "tier": "media",
+        "enabled": False,   # 403 Forbidden
+    },
+    # ── 公司官方新闻室 / IR（一手源，高权重）────────────────────────────
+    {
+        "name": "TSMC 新闻中心",
+        "url": "https://pr.tsmc.com/english/news/rss",
+        "language": "en",
+        "weight": 1.8,
+        "tier": "official",
+        "enabled": False,   # 无公开 RSS，403
+    },
+    {
+        "name": "NVIDIA 新闻室",
+        "url": "https://nvidianews.nvidia.com/cats/press_release.xml",
+        "language": "en",
+        "weight": 1.7,
+        "tier": "official",
+    },
+    {
+        "name": "Intel Newsroom",
+        "url": "https://newsroom.intel.com/feed/",
+        "language": "en",
+        "weight": 1.7,
+        "tier": "official",
+        # ConnectionResetError — 疑似 GFW，VPN 环境下可能恢复
+    },
+    {
+        "name": "AMD 新闻稿",
+        "url": "https://ir.amd.com/rss/news-releases.xml",
+        "language": "en",
+        "weight": 1.6,
+        "tier": "official",
+    },
+    {
+        "name": "ASML 新闻稿",
+        "url": "https://www.asml.com/en/news/press-releases/rss",
+        "language": "en",
+        "weight": 1.7,
+        "tier": "official",
+        "enabled": False,   # 无公开 RSS，ConnectionResetError
+    },
+    {
+        "name": "Micron Newsroom",
+        "url": "https://investors.micron.com/rss/news-releases.xml",
+        "language": "en",
+        "weight": 1.5,
+        "tier": "official",
+    },
+    {
+        "name": "Samsung Semiconductor",
+        "url": "https://news.samsungsemiconductor.com/global/feed/",
+        "language": "en",
+        "weight": 1.5,
+        "tier": "official",
+    },
+    {
+        "name": "SK hynix 新闻",
+        "url": "https://news.skhynix.com/feed/",
+        "language": "en",
+        "weight": 1.5,
+        "tier": "official",
+        # ConnectionResetError — URL 有效，疑似 GFW，VPN 环境下可恢复
+    },
+    {
+        "name": "Synopsys 新闻稿",
+        "url": "https://news.synopsys.com/home?pagetemplate=rss",
+        "language": "en",
+        "weight": 1.4,
+        "tier": "official",
+    },
+    {
+        "name": "Broadcom 新闻稿",
+        "url": "https://investors.broadcom.com/rss/news-releases.xml",
+        "language": "en",
+        "weight": 1.4,
+        "tier": "official",
+    },
+    {
+        "name": "Qualcomm 新闻稿",
+        "url": "https://www.qualcomm.com/news/releases.rss",
+        "language": "en",
+        "weight": 1.4,
+        "tier": "official",
+        "enabled": False,   # 404，无有效 RSS 路径
+    },
+    # ── 行业组织（一手源）──────────────────────────────────────────────
+    {
+        "name": "SEMI 新闻稿",
+        "url": "https://www.semi.org/en/rss",
+        "language": "en",
+        "weight": 1.3,
+        "tier": "industry",
+        "enabled": False,   # 404/403
+    },
+    # SIA 无 RSS，改用 HTML_SOURCES 抓取首页新闻列表
+    # ── 会议/论文（早期技术信号）────────────────────────────────────────
+    # SEC EDGAR / 上交所 / 巨潮 / BIS 需要额外过滤或鉴权，暂用 HTML 爬虫或后续专项接入。
+    {
+        "name": "arXiv cs.AR",
+        "url": "https://arxiv.org/rss/cs.AR",
+        "language": "en",
+        "weight": 1.2,
+        "tier": "academic",
+        "max_items": 15,   # arXiv 每日条目多，限制拉取量
     },
 ]
 
@@ -80,6 +210,8 @@ HTML_SOURCES = [
         "url": "http://www.icsmart.cn",
         "language": "zh",
         "weight": 1.0,
+        "tier": "aggregator",
+        "enabled": False,   # 暂时停用
         "index_urls": [
             "http://www.icsmart.cn",
             "http://www.icsmart.cn/news",
@@ -88,10 +220,26 @@ HTML_SOURCES = [
         "skip_url_keywords": ["tag", "category", "page", "author", "login", "register"],
     },
     {
+        "name": "SIA 新闻",
+        "url": "https://www.semiconductors.org",
+        "language": "en",
+        "weight": 1.3,
+        "tier": "industry",
+        "index_urls": ["https://www.semiconductors.org/"],
+        "article_url_pattern": r"semiconductors\.org/[a-z0-9][a-z0-9-]+/$",
+        "skip_url_keywords": [
+            "category", "tag", "page", "author", "about", "contact",
+            "privacy", "member", "semis-101", "policy", "market-data",
+            "news-events", "wsts", "supply-chain", "map-of",
+            "jobs", "login", "events", "map", "subscribe",
+        ],
+    },
+    {
         "name": "爱集微",
         "url": "https://aijiweinews.com",
         "language": "zh",
         "weight": 1.0,
+        "tier": "aggregator",
         "index_urls": [
             "https://aijiweinews.com",
             "https://aijiweinews.com/news",
@@ -166,6 +314,68 @@ BUSINESS_TAGS = [
 CATEGORIES = TECH_CATEGORIES
 
 # ============================================================
+# 规则兜底关键词桶（无 API Key / LLM 失败时用于评分与分类）
+# ------------------------------------------------------------
+# analyzer.py 的 _fallback_tech_score / _fallback_business_tags 从这里读取；
+# GUI「关键词词库」编辑的就是这两份结构（settings_store 覆盖层可整体替换）。
+# ============================================================
+
+TECH_KEYWORD_BUCKETS = {
+    "制造&工艺": (
+        "process", "node", "nm", "gaa", "nanosheet", "euv", "fab", "foundry",
+        "packaging", "advanced packaging", "cowos", "copos", "hbm", "yield",
+        "wafer", "test", "metrology", "封装", "制程", "工艺", "晶圆", "良率",
+        "设备", "材料", "测试",
+    ),
+    "芯片架构": (
+        "cpu", "gpu", "npu", "asic", "risc-v", "chiplet", "accelerator",
+        "architecture", "nvlink", "processor", "memory architecture",
+        "cpo", "npo", "oio", "optical i/o", "optical io", "optical interconnect",
+        "silicon photonics", "photonics", "co-packaged optics", "near-package optics",
+        "optical engine", "photonic integrated circuit", "pic", "lpo", "linear pluggable optics",
+        "optical module", "optical transceiver", "coherent optics", "pam4",
+        "架构", "异构", "处理器", "加速器", "算力", "硅光", "光互连",
+        "光i/o", "光io", "光电共封装", "共封装光学", "光引擎", "光模块",
+        "光收发器", "光通信", "光通讯", "相干光",
+    ),
+    "EDA工具": (
+        "eda", "synopsys", "cadence", "siemens", "verification", "simulation",
+        "place and route", "dft", "ip", "design automation", "agentic",
+        "验证", "仿真", "布局布线", "设计自动化",
+    ),
+    "标准&会议": (
+        "pcie", "ucie", "cxl", "ethernet", "standard", "isscc", "dac",
+        "iedm", "hot chips", "computex", "conference", "symposium",
+        "标准", "会议", "论坛", "大会",
+    ),
+}
+
+BUSINESS_KEYWORD_BUCKETS = {
+    "财报业绩": ("revenue", "earnings", "margin", "guidance", "profit", "sales", "财报", "营收", "利润", "指引", "业绩"),
+    "融资并购": ("funding", "ipo", "acquisition", "merger", "invest", "融资", "并购", "上市", "投资"),
+    "产能供应链": (
+        "capacity", "supply", "fab", "shipment", "wafer", "shortage",
+        "cpo", "npo", "oio", "silicon photonics", "optical module",
+        "optical transceiver", "co-packaged optics", "lpo",
+        "产能", "供应链", "扩产", "出货", "晶圆厂", "硅光", "光模块",
+        "光收发器", "光通信", "光通讯", "光互连", "光电共封装",
+    ),
+    "政策管制": ("export control", "tariff", "policy", "subsidy", "chips act", "管制", "政策", "补贴", "关税"),
+    "客户订单": (
+        "customer", "order", "contract", "deal", "meta", "google", "nvidia", "amd",
+        "cpo", "npo", "oio", "optical module", "optical transceiver",
+        "客户", "订单", "合作", "硅光", "光模块", "光收发器", "光互连",
+    ),
+    "市场价格": (
+        "market", "price", "share", "forecast", "inventory", "optical module",
+        "silicon photonics", "市场", "价格", "份额", "预测", "库存", "硅光",
+        "光模块", "光通信", "光通讯",
+    ),
+    "公司战略": ("roadmap", "strategy", "partnership", "ecosystem", "战略", "路线图", "生态", "转型"),
+    "资本市场": ("stock", "shares", "sell-off", "rally", "valuation", "股价", "市值", "抛售", "反弹"),
+}
+
+# ============================================================
 # Prompt 配置
 # ============================================================
 
@@ -176,12 +386,13 @@ TECH_RELEVANCE_PROMPT = """
 
 重点关注（高分）：
 - 制造&工艺：先进制程、晶圆制造、设备材料、良率、测试、先进封装、HBM封装、CoWoS/CoPoS、背面供电、GAA、High-NA EUV等。
-- 芯片架构：CPU/GPU/NPU/ASIC、RISC-V、Chiplet架构、异构计算、AI加速器、存储架构、互连架构、系统级算力架构。
+- 芯片架构：CPU/GPU/NPU/ASIC、RISC-V、Chiplet架构、异构计算、AI加速器、存储架构、互连架构、系统级算力架构、硅光/光互连/光I/O、CPO/NPO/OIO、光电共封装等。
 - EDA工具：EDA软件、验证仿真、布局布线、DFT、IP、AI辅助设计、Agentic EDA、设计到制造协同。
-- 标准&会议：PCIe、UCIe、CXL、HBM、Ethernet、NVLink等标准进展，以及DAC、ISSCC、IEDM、Hot Chips、Computex等重要会议中的技术发布。
+- 标准&会议：PCIe、UCIe、CXL、HBM、Ethernet、NVLink、800G/1.6T、PAM4/相干光通信等标准进展，以及DAC、ISSCC、IEDM、Hot Chips、OFC、Computex等重要会议中的技术发布。
 
 排除/低分：
 - 纯财报、股价、融资、并购、客户订单，除非包含实质技术细节。
+- 产能扩充/量产计划/扩产时间表，除非文章包含具体新工艺节点或技术路线细节（纯产能商业新闻评分≤3，并归入"其他技术"或直接不选）。
 - 泛AI、泛消费电子、泛宏观经济，未落到芯片技术。
 
 请严格按照以下JSON格式返回，不要有任何额外文字：
@@ -198,8 +409,8 @@ BUSINESS_RELEVANCE_PROMPT = """
 - 融资并购：融资、IPO、并购、资产重组、战略投资、产业基金。
 - 产能供应链：晶圆厂扩产、封装产能、HBM/DRAM/NAND供应、设备交付、产能锁定、供应短缺。
 - 政策管制：出口管制、政府补贴、关税、产业政策、地缘政治、合规风险。
-- 客户订单：大客户合作、长期订单、云厂商采购、车企/AI公司design win、客户验证进展。
-- 市场价格：全球/区域市场规模、价格周期、库存变化、市场份额、机构预测。
+- 客户订单：大客户合作、长期订单、云厂商采购、车企/AI公司design win、客户验证进展，以及AI数据中心光模块、CPO/NPO/OIO、硅光/光互连相关订单。
+- 市场价格：全球/区域市场规模、价格周期、库存变化、市场份额、机构预测，含光模块、硅光、光通信器件等细分市场。
 - 公司战略：技术路线图背后的商业策略、组织调整、生态合作、业务转型、管理层表态。
 
 排除/低分：
@@ -226,6 +437,7 @@ TECH_SUMMARY_PROMPT = """
 请为以下芯片行业文章生成面向「技术版周报」的精读摘要。原文可能是中文或英文，但输出必须全部为中文。
 
 语言限制：所有输出字段必须使用中文，关键词也用中文；公司名、芯片型号、HBM、GAA、EUV、RISC-V 等专有名词可保留英文，禁止出现整句英文摘要。
+如果原文正文包含登录、注册、导航、广告等页面噪声，不要翻译或复述这些噪声，应仅基于有效标题和正文生成中文摘要；无法判断时也要输出中文说明。
 
 要求：
 1. 标题：突出技术主题，不超过30字，用中文
@@ -244,6 +456,7 @@ BUSINESS_SUMMARY_PROMPT = """
 请为以下芯片行业文章生成面向「商业版日报」的结构化摘要。原文可能是中文或英文，但输出必须全部为中文。
 
 语言限制：所有输出字段必须使用中文，关键词也用中文；公司名、芯片型号、HBM、GAA、EUV、RISC-V 等专有名词可保留英文，禁止出现整句英文摘要。
+如果原文正文包含登录、注册、导航、广告等页面噪声，不要翻译或复述这些噪声，应仅基于有效标题和正文生成中文摘要；无法判断时也要输出中文说明。
 
 要求：
 1. 标题：突出公司/产业动作，不超过30字，用中文
@@ -293,7 +506,7 @@ REQUEST_HEADERS = {
 }
 REQUEST_TIMEOUT = 15
 REQUEST_DELAY = 1.2        # HTML 爬取间隔（秒）
-RSS_FETCH_TIMEOUT = 10     # RSS 抓取超时
+RSS_FETCH_TIMEOUT = 25     # RSS 抓取超时（IR 类服务器较慢，留足余量）
 
 # ============================================================
 # 图片抓取（reporter 出报告时下载内嵌原文配图）
@@ -313,3 +526,26 @@ IMAGE_FETCH_WORKERS = 10
 OUTPUT_DIR = "output"
 OUTPUT_HTML = True
 OUTPUT_JSON = True
+
+# ============================================================
+# GUI 配置覆盖层
+# ------------------------------------------------------------
+# 以上均为「代码默认值」。若存在 data/gui_settings.json（由轻量 GUI 保存），
+# 在此把用户覆盖项合并到本模块全局上。手动运行 / 计划任务 / GUI 子进程
+# 三者因此共用同一份设置。覆盖失败时静默回退默认值，不影响主流程。
+# ============================================================
+
+try:
+    import settings_store as _settings_store
+    _settings_store.apply_overrides(globals())
+except Exception as _override_err:  # noqa: BLE001 — 覆盖层异常不得拖垮主流程
+    import logging as _logging
+    _logging.getLogger(__name__).warning(f"GUI 设置覆盖加载失败，使用默认值: {_override_err}")
+
+# 覆盖可能改动了 TECH_* 源值，这里重新同步旧命名别名，确保别名指向最新值
+MAX_ARTICLE_AGE_DAYS = TECH_ARTICLE_AGE_DAYS
+TOP_N = TECH_TOP_N
+CATEGORIES = TECH_CATEGORIES
+RELEVANCE_PROMPT = TECH_RELEVANCE_PROMPT
+SUMMARY_PROMPT = TECH_SUMMARY_PROMPT
+EXECUTIVE_SUMMARY_PROMPT = TECH_EXECUTIVE_SUMMARY_PROMPT
