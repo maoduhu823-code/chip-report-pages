@@ -25,6 +25,14 @@ $proj = $PSScriptRoot
 Push-Location $proj
 
 try {
+    # 从用户级注册表继承环境变量，兼容"新会话未继承"和"计划任务"场景
+    foreach ($var in @('DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL_FAST','LLM_PROVIDER','LLM_SCORING_BATCH_SIZE')) {
+        if (-not (Get-Item "Env:$var" -ErrorAction SilentlyContinue)) {
+            $val = [System.Environment]::GetEnvironmentVariable($var, 'User')
+            if ($val) { Set-Item "Env:$var" $val }
+        }
+    }
+
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [Console]::InputEncoding = $utf8NoBom
     [Console]::OutputEncoding = $utf8NoBom
@@ -38,10 +46,11 @@ try {
 
     function Publish-Report {
         if ($NoPublish) {
-            Write-Host "$(& $ts) [Pages] 已跳过发布（-NoPublish）"
+            Write-Host "$(& $ts) [Publish] 已跳过发布（-NoPublish）"
             return
         }
-        Write-Host "$(& $ts) [Pages] 发布技术周报到 GitHub Pages..."
+
+        Write-Host "$(& $ts) [Pages] 更新并推送 GitHub Pages..."
         & (Join-Path $proj "publish_pages.ps1") -Report tech
         if ($LASTEXITCODE -ne 0) { throw "GitHub Pages 发布失败 (exit $LASTEXITCODE)" }
     }

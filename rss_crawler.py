@@ -16,6 +16,7 @@ from config import (
     RSS_SOURCES, REQUEST_HEADERS, RSS_FETCH_TIMEOUT,
     MAX_RSS_ITEMS_PER_SOURCE, MAX_ARTICLE_AGE_DAYS, CRAWL_TEXT_LIMIT,
 )
+from image_fetch import looks_like_content_image
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,9 @@ def _extract_image_from_entry(entry) -> str:
     # media:thumbnail
     media_thumbnail = getattr(entry, "media_thumbnail", None)
     if media_thumbnail and isinstance(media_thumbnail, list):
-        return media_thumbnail[0].get("url", "")
+        url = media_thumbnail[0].get("url", "")
+        if url:
+            return url
 
     # enclosure（播客/RSS 图片附件）
     enclosures = getattr(entry, "enclosures", [])
@@ -94,6 +97,17 @@ def _extract_image_from_entry(entry) -> str:
         for mc in media_content:
             if mc.get("medium") == "image" or mc.get("type", "").startswith("image/"):
                 return mc.get("url", "")
+
+    # content:encoded HTML（WordPress 等站点提供全文，首图往往在此，无需额外请求）
+    content_list = getattr(entry, "content", None)
+    if content_list:
+        import re
+        raw_html = content_list[0].get("value", "")
+        if raw_html:
+            for m in re.finditer(r'(?:src|data-src|data-original)=["\']([^"\']+\.(jpg|jpeg|png|webp)(?:[^"\']*)?)["\']', raw_html, re.IGNORECASE):
+                src = m.group(1).strip()
+                if src and looks_like_content_image(src):
+                    return src
 
     return ""
 
@@ -123,7 +137,17 @@ def fetch_rss_source(source_config: dict, max_age_days: int = MAX_ARTICLE_AGE_DA
     try:
         resp = requests.get(
             feed_url,
-            headers={**REQUEST_HEADERS, "Accept": "application/rss+xml, application/xml, text/xml, */*"},
+            headers={
+                **REQUEST_HEADERS,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+            },
             timeout=RSS_FETCH_TIMEOUT,
         )
         resp.raise_for_status()
@@ -136,8 +160,10 @@ def fetch_rss_source(source_config: dict, max_age_days: int = MAX_ARTICLE_AGE_DA
         logger.warning(f"[RSS] 解析异常 {name}: {feed.bozo_exception}")
         return []
 
+    tier = source_config.get("tier", "media")
+    max_items = source_config.get("max_items", MAX_RSS_ITEMS_PER_SOURCE)
     articles = []
-    for entry in feed.entries[:MAX_RSS_ITEMS_PER_SOURCE * 2]:  # 多取一些，过滤后再截断
+    for entry in feed.entries[:max_items * 2]:  # 多取一些，过滤后再截断
         link = getattr(entry, "link", "") or ""
         title = getattr(entry, "title", "") or ""
 
@@ -162,9 +188,10 @@ def fetch_rss_source(source_config: dict, max_age_days: int = MAX_ARTICLE_AGE_DA
             "source": name,
             "language": language,
             "weight": weight,
+            "tier": tier,
         })
 
-        if len(articles) >= MAX_RSS_ITEMS_PER_SOURCE:
+        if len(articles) >= max_items:
             break
 
     logger.info(f"[RSS] {name}: 收到 {len(feed.entries)} 条，保留 {len(articles)} 篇（近{max_age_days}天）")
@@ -175,6 +202,9 @@ def crawl_all_rss(max_age_days: int = MAX_ARTICLE_AGE_DAYS) -> list[dict]:
     """拉取所有 RSS 源，返回合并后的文章列表"""
     all_articles = []
     for source in RSS_SOURCES:
+        if not source.get("enabled", True):
+            logger.info(f"[RSS] 跳过已禁用源: {source['name']}")
+            continue
         articles = fetch_rss_source(source, max_age_days=max_age_days)
         all_articles.extend(articles)
         time.sleep(0.5)  # 礼貌间隔

@@ -20,7 +20,9 @@ param(
     # 可手动覆盖 Pages 地址，例如：https://corgi-mao.github.io/chip-report-pages/
     [string]$BaseUrl = $env:PAGES_BASE_URL,
 
-    [switch]$NoPush
+    [switch]$NoGit,
+    [switch]$NoPush,
+    [switch]$NoLinks
 )
 
 $ErrorActionPreference = "Stop"
@@ -249,7 +251,9 @@ if (-not (Test-Path -LiteralPath $OutputDir)) {
     throw "未找到输出目录：$OutputDir"
 }
 
-Ensure-GitRepo $PagesDir
+if (-not $NoGit) {
+    Ensure-GitRepo $PagesDir
+}
 
 $reportsDir = Join-Path $PagesDir "reports"
 New-Item -ItemType Directory -Force -Path $reportsDir | Out-Null
@@ -271,27 +275,33 @@ foreach ($file in $files) {
 $indexHtml = New-IndexHtml $reportsDir
 [System.IO.File]::WriteAllText((Join-Path $PagesDir "index.html"), $indexHtml, $utf8NoBom)
 
-& git -C $PagesDir add . | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "git add 失败" }
-
-$status = & git -C $PagesDir status --short
-if ($status) {
-    $message = "Publish reports $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
-    & git -C $PagesDir commit -m $message | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "git commit 失败" }
-    Write-Step "已提交 GitHub Pages 更新"
+if ($NoGit) {
+    Write-Step "已跳过 Git 操作（-NoGit）"
 } else {
-    Write-Step "没有新的 Pages 文件变更"
+    & git -C $PagesDir add . | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "git add 失败" }
+
+    $status = & git -C $PagesDir status --short
+    if ($status) {
+        $message = "Publish reports $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+        & git -C $PagesDir commit -m $message | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "git commit 失败" }
+        Write-Step "已提交 GitHub Pages 更新"
+    } else {
+        Write-Step "没有新的 Pages 文件变更"
+    }
+
+    if ($NoPush) {
+        Write-Step "已跳过推送（-NoPush）"
+    } else {
+        Push-PagesRepo $PagesDir
+        Write-Step "已推送到 GitHub"
+    }
 }
 
-if ($NoPush) {
-    Write-Step "已跳过推送（-NoPush）"
-} else {
-    Push-PagesRepo $PagesDir
-    Write-Step "已推送到 GitHub"
-}
-
-if ($publicBaseUrl) {
+if ($NoLinks) {
+    return
+} elseif ($publicBaseUrl) {
     Write-Host ""
     Write-Host "GitHub Pages 首页：$publicBaseUrl"
     foreach ($link in $publishedLinks) {

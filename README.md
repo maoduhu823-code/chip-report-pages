@@ -21,7 +21,7 @@ copy .env.example .env
 .\run_tech.ps1
 ```
 
-默认会在报告生成后调用 `publish_pages.ps1`，把最新 HTML 推送到 GitHub Pages 发布仓库。只想本地生成时使用：
+默认会在报告生成后更新本地静态站点并推送 GitHub Pages。只想本地生成时使用：
 
 ```powershell
 .\run_business.ps1 -NoPublish

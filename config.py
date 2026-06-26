@@ -525,10 +525,41 @@ RSS_FETCH_TIMEOUT = 25     # RSS 抓取超时（IR 类服务器较慢，留足�
 
 # 单张图片 / 原文页抓取超时（秒）。海外图床较慢，留足余量。
 IMAGE_FETCH_TIMEOUT = 12
-# 图片下载失败后的重试次数，应对瞬时网络抖动。
+# 图片下载失败后的重试次数，应对瞬时网络抖动（含 GFW/代理偶发 TLS 握手重置）。
 IMAGE_FETCH_RETRIES = 1
 # 并发下载图片的线程数，抵消加大超时带来的串行耗时。
 IMAGE_FETCH_WORKERS = 10
+
+# 站点专属图片抓取规则（image_fetch.py 读取，key 必须与 RSS_SOURCES/HTML_SOURCES 的 name 完全一致）。
+# 通用兜底链路（RSS/正文已知图 → 回原文页抓 og:image → 内嵌失败时改交浏览器直载 → 站点兜底图/分类SVG）
+# 已能处理大多数情况（含 Content-Type 误标、瞬时连接重置）；只有「通用链路解决不了的站点专属怪癖」
+# 才需要在这里登记规则。随测试推进逐步补充：
+#   - 某站长期只显示兜底图时，先查 run.log/crawl.log 里 "[图片]" 开头的 WARNING 定位失败环节；
+#   - 若是该站正文图藏在非常规标签/属性里，加 extra_selectors；
+#   - 若已确认该站从不带可用配图，加 skip_page_scrape 省一次必败的请求。
+#
+# fallback_image：该源「实在找不到真实配图」时使用的固定兜底图（相对本文件的路径）。
+#   - 仅给「公司官方新闻室」配：品牌色背景 + 该公司公有领域 logo 的位图，比统一的分类 SVG 更可辨识；
+#   - 必须是位图（PNG/JPG）——微信图文导出（wechat_render）会跳过 data:image/svg，SVG 兜底在公众号里不显示；
+#   - 图由 tools/build_source_logos.py 生成并提交到 assets/source_logos/，运行期只读取、不联网、不加依赖；
+#   - 未配 fallback_image 或文件缺失时自动退回分类 SVG（媒体/中文聚合源即如此）。
+SITE_IMAGE_RULES: dict[str, dict] = {
+    # 公司官方新闻室：找不到真实配图时显示「品牌色 + 公有领域 logo」兜底图（见 assets/source_logos/）
+    "NVIDIA 新闻室": {"fallback_image": "assets/source_logos/nvidia.png"},
+    "Intel Newsroom": {"fallback_image": "assets/source_logos/intel.png"},
+    "AMD 新闻稿": {"fallback_image": "assets/source_logos/amd.png"},
+    "Micron Newsroom": {"fallback_image": "assets/source_logos/micron.png"},
+    "Samsung Semiconductor": {"fallback_image": "assets/source_logos/samsung.png"},
+    "SK hynix 新闻": {"fallback_image": "assets/source_logos/skhynix.png"},
+    "Synopsys 新闻稿": {"fallback_image": "assets/source_logos/synopsys.png"},
+    "Broadcom 新闻稿": {"fallback_image": "assets/source_logos/broadcom.png"},
+    "Qualcomm 新闻稿": {"fallback_image": "assets/source_logos/qualcomm.png"},
+    "TSMC 新闻中心": {"fallback_image": "assets/source_logos/tsmc.png"},
+    "ASML 新闻稿": {"fallback_image": "assets/source_logos/asml.png"},
+    # 示例：站点专属找图规则可与 fallback_image 并存
+    # "某站点": {"extra_selectors": ['meta[property="article:image"]'], "fallback_image": "assets/source_logos/x.png"},
+    # "已知无图站点": {"skip_page_scrape": True},
+}
 
 # ============================================================
 # 输出配置

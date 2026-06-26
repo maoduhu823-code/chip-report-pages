@@ -32,8 +32,9 @@ RATINGS_PATH = os.path.join(DATA_DIR, "ratings.json")
 # （评审看板上对同一条快速连点 flag/分数时尤为关键）
 _LOCK = threading.Lock()
 
-# 报告文件名 → (slug, date)，用于从 file 参数反推归属报告
-_FILE_RE = re.compile(r"^(?:daily|weekly)_(\d{4}-\d{2}-\d{2})_(business|tech)$")
+# 报告文件名 → (slug, date)，用于从 file 参数反推归属报告。
+# tech-handpick 归入 tech，便于人工精选周报继续参与评分/导出。
+_FILE_RE = re.compile(r"^(?:daily|weekly)_(\d{4}-\d{2}-\d{2})_(business|tech(?:-handpick)?)$")
 
 # 允许写入记录的快照字段（其余字段忽略，避免前端塞脏数据）
 _SNAPSHOT_FIELDS = ("title", "source", "ai_score", "category", "slug", "date")
@@ -134,7 +135,7 @@ def upsert(url: str, payload: dict) -> dict:
         m = _FILE_RE.match(str(payload.get("file", "")))
         if m:
             payload.setdefault("date", m.group(1))
-            payload.setdefault("slug", m.group(2))
+            payload.setdefault("slug", "tech" if m.group(2).startswith("tech") else "business")
 
         if "human_score" in payload:
             entry["human_score"] = _clean_score(payload["human_score"])

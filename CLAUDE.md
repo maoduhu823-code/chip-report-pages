@@ -48,7 +48,9 @@
 | `rss_crawler.py` | RSS/Atom 解析（feedparser），`crawl_all_rss(max_age_days=...)` 窗口参数化 |
 | `crawler.py` | 通用 HTML 爬虫，由 `HTML_SOURCES` 配置驱动；站点改版时调整 `article_url_pattern` / `skip_url_keywords` 或正文选择器 |
 | `analyzer.py` | `analyze_business_daily()`（去重→批量评分→阈值收录→摘要→概览）/ `analyze_tech_weekly()`（去重→批量评分→TopN 精读→概览+`generate_weekly_digest()`→附录）；优先 DeepSeek API，失败时回退 Claude Code Haiku |
-| `reporter.py` | `save_report()` 渲染 HTML/JSON：商业 `_build_tag_sections`、技术 `_build_category_sections` + digest + 附录；图片失败降级分类 SVG |
+| `reporter.py` | `save_report()` 渲染 HTML/JSON：商业 `_build_tag_sections`、技术 `_build_category_sections` + digest + 附录；图片缺失时降级——公司新闻室用品牌兜底图，其余用分类 SVG |
+| `image_fetch.py` | 找图/验图唯一实现（供 crawler/reporter/webgui 复用）：og:image 抓取、字节签名校验、四级兜底链 `resolve_article_image()`；`source_fallback_image_uri()` 读公司源品牌兜底图。站点专属规则见 `config.SITE_IMAGE_RULES`（`extra_selectors` / `skip_page_scrape` / `fallback_image`） |
+| `tools/build_source_logos.py` | 构建期脚本（仅手动运行，依赖 Pillow）：从 Wikimedia Commons 取公有领域 logo 合成「品牌色 + logo」兜底图到 `assets/source_logos/*.png` 并产出 `CREDITS.md` 版权清单；运行期只读图、不联网、不加运行时依赖 |
 | `main.py` | 入口：`--report` 分流、seen 记录、时效窗口选择；启动时 `os.chdir` 到脚本目录以兼容计划任务 |
 | `crawl_only.py` | 无 LLM 纯爬虫入口 |
 | `publish_pages.ps1` | 将 `output/` 中最新商业日报/技术周报 HTML 复制到 `github_pages_site/reports/`，重建静态站点首页，提交并推送 GitHub Pages |

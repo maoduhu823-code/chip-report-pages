@@ -1,18 +1,19 @@
 {% extends "base.html" %}
-{% block title %}控制台 — 芯片资讯{% endblock %}
+{% block title %}采集需求 — 半导体信息采集{% endblock %}
 {% block content %}
 <div class="actionbar">
-  <div class="actionbar-title">运行参数控制台</div>
+  <div class="actionbar-title">信息采集需求</div>
   <div class="actionbar-btns">
     <button id="btn-reset" class="btn btn-ghost" type="button">重置为默认</button>
-    <button id="btn-save" class="btn btn-primary" type="button">保存设置</button>
+    <button id="btn-save" class="btn btn-primary" type="button">保存需求</button>
+    <button id="btn-run-top" class="btn btn-accent js-run" type="button">开始采集</button>
   </div>
 </div>
 
-<p class="hint">改动保存后写入 <code>data/gui_settings.json</code>，对手动运行、计划任务、本控制台触发的运行三者同时生效。</p>
+<p class="hint">编辑采集范围、筛选阈值、信息源、关键词和 Prompt 后，点击下方按钮会先保存需求，再启动采集代码。</p>
 
 <section class="card run-card">
-  <h2 class="card-h">▶️ 运行流水线 <span class="muted">（子进程继承上面的设置；同一时刻只允许一个运行）</span></h2>
+  <h2 class="card-h">启动采集 <span class="muted">（同一时刻只允许一个运行）</span></h2>
   <div class="run-controls">
     <div class="run-field">
       <label for="run-report">报告类型</label>
@@ -28,7 +29,7 @@
         <option value="llmOnly">仅评分（复用 raw_articles.json）</option>
       </select>
     </div>
-    <button id="btn-run" class="btn btn-primary" type="button">▶ 开始运行</button>
+    <button id="btn-run" class="btn btn-primary js-run" type="button">保存需求并开始采集</button>
     <span id="run-status" class="run-status"></span>
     <a id="run-goto" class="run-goto" href="#" hidden>→ 在评审看板查看</a>
   </div>
@@ -36,12 +37,12 @@
 </section>
 
 <section class="card">
-  <h2 class="card-h">⚙️ 运行变量</h2>
+  <h2 class="card-h">采集变量</h2>
   <div id="vars-grid" class="vars-grid"></div>
 </section>
 
 <section class="card">
-  <h2 class="card-h">📡 信息源 <span class="muted" id="src-summary"></span></h2>
+  <h2 class="card-h">信息源 <span class="muted" id="src-summary"></span></h2>
   <div class="src-tools">
     <button class="chip-btn" data-bulk="all" type="button">全选</button>
     <button class="chip-btn" data-bulk="none" type="button">全不选</button>
@@ -54,7 +55,7 @@
 </section>
 
 <section class="card">
-  <h2 class="card-h">🏷️ 关键词词库 <span class="muted">（规则兜底评分/分类用；可被 LLM 评分覆盖）</span></h2>
+  <h2 class="card-h">关键词词库 <span class="muted">（规则兜底评分/分类用；可被 LLM 评分覆盖）</span></h2>
   <div class="tabs" id="kb-tabs">
     <button class="tab active" data-tab="tech" type="button">技术分类</button>
     <button class="tab" data-tab="business" type="button">商业标签</button>
@@ -64,13 +65,13 @@
 </section>
 
 <section class="card">
-  <h2 class="card-h">✍️ Prompt 高级编辑 <span class="muted">（懂 prompt 写法再改；留空=用代码默认）</span></h2>
+  <h2 class="card-h">Prompt 高级编辑 <span class="muted">（留空=用代码默认）</span></h2>
   <div id="prompts-list"></div>
 </section>
 {% endblock %}
 
 {% block scripts %}
 <script id="settings-data" type="application/json">{{ settings|tojson }}</script>
-<script src="{{ url_for('static', filename='control.js') }}"></script>
-<script src="{{ url_for('static', filename='run.js') }}"></script>
+<script src="{{ url_for('static', filename='control.js') }}?v=20260622-flow4"></script>
+<script src="{{ url_for('static', filename='run.js') }}?v=20260622-flow4"></script>
 {% endblock %}

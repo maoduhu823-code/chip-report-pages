@@ -28,8 +28,9 @@ const sortEl = document.getElementById("sort-select");
 const searchEl = document.getElementById("search-box");
 const statEl = document.getElementById("board-stat");
 const refreshBtn = document.getElementById("btn-refresh");
+const tokenSummaryEl = document.getElementById("token-summary");
 
-let STATE = { file: "", kind: "", date: "", articles: [], ratings: {}, nodes: new Map() };
+let STATE = { file: "", kind: "", date: "", articles: [], ratings: {}, nodes: new Map(), metadata: {} };
 let curFilter = "all";
 
 // ── 评分读取 ───────────────────────────────────────────────────
@@ -44,8 +45,36 @@ function isDiverge(a) {
   return ai != null && h != null && Math.abs(ai - h) >= 3;
 }
 
+function googleSearchUrl(query) {
+  return "https://www.google.com/search?q=" + encodeURIComponent(String(query || "").trim());
+}
+
+function splitTerms(value) {
+  if (!value) return [];
+  return String(value)
+    .replaceAll("，", ",")
+    .replaceAll("、", ",")
+    .replaceAll("；", ",")
+    .replaceAll(";", ",")
+    .split(",")
+    .map((term) => term.trim())
+    .filter(Boolean);
+}
+
 // ── 数据加载 ───────────────────────────────────────────────────
+async function latestRunReport() {
+  try {
+    const status = await fetch("/api/run/status").then((r) => r.json());
+    if (status && status.status === "done" && status.report) return status.report;
+  } catch (_) { /* 网络异常下继续显示空态 */ }
+  return "";
+}
+
 async function loadReports(preselect) {
+  if (!preselect) {
+    preselect = await latestRunReport();
+  }
+
   let reports = [];
   try {
     const data = await fetch("/api/reports").then((r) => r.json());
@@ -56,6 +85,7 @@ async function loadReports(preselect) {
   if (!reports.length) {
     board.replaceChildren();
     emptyEl.hidden = false;
+    if (tokenSummaryEl) tokenSummaryEl.hidden = true;
     statEl.textContent = "";
     return;
   }
@@ -66,6 +96,9 @@ async function loadReports(preselect) {
     selectEl.appendChild(el("option", { value: r.file }, label));
   }
   const target = (preselect && reports.some((r) => r.file === preselect)) ? preselect : reports[0].file;
+  if (!new URLSearchParams(location.search).get("file")) {
+    history.replaceState(null, "", "/dashboard?file=" + encodeURIComponent(target));
+  }
   selectEl.value = target;
   await loadReport(target);
 }
@@ -90,9 +123,50 @@ async function loadReport(file) {
   STATE = {
     file: rep.file, kind: rep.kind, date: rep.date,
     articles: rep.articles || [], ratings: ratings || {}, nodes: new Map(),
+    metadata: rep.metadata || {},
   };
+  renderTokenSummary();
   renderBoard();
   applyView();
+}
+
+function fmtTokens(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "未捕获";
+  if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(value);
+}
+
+function fmtCost(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "—";
+  return "$" + value.toFixed(value < 0.01 ? 4 : 3);
+}
+
+function renderTokenSummary() {
+  if (!tokenSummaryEl) return;
+  const m = STATE.metadata || {};
+  const modelText = m.models && Object.keys(m.models).length
+    ? Object.entries(m.models).map(([name, count]) => `${name} × ${count}`).join("，")
+    : "—";
+  tokenSummaryEl.replaceChildren(
+    el("div", { class: "token-title" }, "Token 统计"),
+    el("div", { class: "token-grid" }, [
+      tokenItem("执行器", m.ai_executor || m.provider || "—"),
+      tokenItem("调用次数", typeof m.calls === "number" ? String(m.calls) : "—"),
+      tokenItem("输入", fmtTokens(m.input_tokens)),
+      tokenItem("输出", fmtTokens(m.output_tokens)),
+      tokenItem("合计", fmtTokens(m.total_tokens)),
+      tokenItem("费用", fmtCost(m.cost_usd)),
+      tokenItem("模型", modelText, true),
+    ]),
+  );
+  tokenSummaryEl.hidden = false;
+}
+
+function tokenItem(label, value, wide = false) {
+  return el("div", { class: "token-item" + (wide ? " wide" : "") }, [
+    el("span", { class: "token-label" }, label),
+    el("span", { class: "token-value" }, value),
+  ]);
 }
 
 // ── 卡片渲染 ───────────────────────────────────────────────────
@@ -119,7 +193,19 @@ function metaRow(a) {
     t = t.trim();
     if (t) row.appendChild(el("span", { class: "badge badge-tag" }, t));
   });
-  if (a.keywords) row.appendChild(el("span", { class: "kw" }, "关键词：" + a.keywords));
+  const terms = splitTerms(a.keywords);
+  if (terms.length) {
+    const kw = el("span", { class: "kw" }, "关键词：");
+    terms.forEach((term) => {
+      kw.appendChild(el("a", {
+        href: googleSearchUrl(term),
+        target: "_blank",
+        rel: "noopener",
+        title: "Google 搜索：" + term,
+      }, term));
+    });
+    row.appendChild(kw);
+  }
   return row;
 }
 

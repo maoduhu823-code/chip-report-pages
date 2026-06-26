@@ -21,7 +21,7 @@ const TIER_LABELS = {
 const fmtTokens = (v) => (typeof v === "number" ? (v / 1000).toFixed(1) + "k" : "—");
 const fmtCost = (v) => (typeof v === "number" && v > 0 ? "$" + v.toFixed(4) : "—");
 
-// ── 改词试评分 ─────────────────────────────────────────────────
+// ── 关键词试评分 ───────────────────────────────────────────────
 async function rescore() {
   const btn = document.getElementById("btn-rescore");
   const stat = document.getElementById("rs-stat");

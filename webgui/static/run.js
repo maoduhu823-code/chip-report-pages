@@ -1,9 +1,10 @@
 "use strict";
 
-// 运行触发 + SSE 实时日志（挂在控制台页「▶️ 运行流水线」卡片上）
+// 运行触发 + SSE 实时日志（挂在采集需求页）
 (function () {
-  const btn = document.getElementById("btn-run");
-  if (!btn) return;
+  const buttons = [...document.querySelectorAll(".js-run")];
+  if (!buttons.length) return;
+  const btn = document.getElementById("btn-run") || buttons[0];
   const logEl = document.getElementById("run-log");
   const statusEl = document.getElementById("run-status");
   const gotoEl = document.getElementById("run-goto");
@@ -25,6 +26,10 @@
     if (es) { es.close(); es = null; }
   }
 
+  function setButtonsDisabled(disabled) {
+    buttons.forEach((b) => { b.disabled = disabled; });
+  }
+
   function openStream() {
     closeStream();
     es = new EventSource("/api/run/stream");
@@ -38,12 +43,14 @@
       let d = {};
       try { d = JSON.parse(e.data); } catch (_) {}
       closeStream();
-      btn.disabled = false;
+      setButtonsDisabled(false);
       if (d.status === "done") {
         setStatus("✓ 运行完成", "ok");
         if (d.report) {
-          gotoEl.href = "/dashboard?file=" + encodeURIComponent(d.report);
+          const target = "/dashboard?file=" + encodeURIComponent(d.report);
+          gotoEl.href = target;
           gotoEl.hidden = false;
+          window.setTimeout(() => { window.location.assign(target); }, 500);
         }
       } else {
         setStatus("✗ 运行失败（详见日志）", "err");
@@ -55,11 +62,20 @@
   async function run() {
     const report = document.getElementById("run-report").value;
     const mode = document.getElementById("run-mode").value;
-    btn.disabled = true;
+    setButtonsDisabled(true);
     gotoEl.hidden = true;
     logEl.hidden = false;
     logEl.textContent = "";
-    setStatus("运行中…", "");
+    setStatus("正在保存采集需求...", "");
+    if (typeof save === "function") {
+      const saved = await save({ quiet: true });
+      if (!saved) {
+        setStatus("保存失败，未启动采集", "err");
+        setButtonsDisabled(false);
+        return;
+      }
+    }
+    setStatus("采集中...", "");
     try {
       const resp = await fetch("/api/run", {
         method: "POST",
@@ -69,23 +85,23 @@
       const d = await resp.json();
       if (!resp.ok || !d.ok) {
         setStatus("无法启动：" + (d.msg || d.error || resp.status), "err");
-        btn.disabled = false;
+        setButtonsDisabled(false);
         return;
       }
       openStream();
     } catch (e) {
       setStatus("请求失败：" + e.message, "err");
-      btn.disabled = false;
+      setButtonsDisabled(false);
     }
   }
 
-  btn.addEventListener("click", run);
+  buttons.forEach((b) => b.addEventListener("click", run));
 
   // 页面加载时若已有运行在进行，自动接管并补流日志
   fetch("/api/run/status").then((r) => r.json()).then((s) => {
     if (s.status === "running") {
-      btn.disabled = true;
-      setStatus("运行中…（接管已有运行）", "");
+      setButtonsDisabled(true);
+      setStatus("采集中...（接管已有运行）", "");
       logEl.hidden = false;
       openStream();
     }

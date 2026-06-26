@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{% block title %}芯片资讯控制台{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<title>{% block title %}半导体信息采集{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20260622-flow4">
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-inner">
-    <div class="brand"><span class="brand-icon">🔬</span> 芯片资讯控制台</div>
+    <div class="brand"><span class="brand-icon">🔬</span> 半导体信息采集</div>
     <nav class="nav">
-      <a href="/" class="nav-link {{ 'active' if active=='control' else '' }}">控制台</a>
+      <a href="/" class="nav-link {{ 'active' if active=='control' else '' }}">采集需求</a>
       <a href="/dashboard" class="nav-link {{ 'active' if active=='dashboard' else '' }}">评审看板</a>
       <a href="/export" class="nav-link {{ 'active' if active=='export' else '' }}">导出分享</a>
       <a href="/insights" class="nav-link {{ 'active' if active=='insights' else '' }}">洞察</a>

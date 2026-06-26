@@ -18,6 +18,7 @@ from config import (
     HTML_SOURCES, MAX_CANDIDATES_PER_SITE,
     CRAWL_TEXT_LIMIT, CRAWL_ENRICH_MIN_TEXT,
 )
+import image_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def collect_article_links(site_config: dict, session: requests.Session, max_coun
     return list(found_links)[:max_count]
 
 
-def extract_article_content(url: str, session: requests.Session) -> dict | None:
+def extract_article_content(url: str, session: requests.Session, source_name: str = "") -> dict | None:
     """
     抓取单篇文章，提取 title / text / image_url。
     返回标准格式 dict，与 rss_crawler.py 输出对齐。
@@ -131,25 +132,11 @@ def extract_article_content(url: str, session: requests.Session) -> dict | None:
 
     text = re.sub(r"\s+", " ", text).strip()[:CRAWL_TEXT_LIMIT]
 
-    # ---- 图片 ----
-    image_url = ""
-    og_image = soup.find("meta", property="og:image")
-    if og_image:
-        image_url = og_image.get("content", "").strip()
-
-    if not image_url and article_node:
-        for img in article_node.find_all("img", src=True):
-            src = img["src"].strip()
-            if src and not src.endswith(".gif") and "icon" not in src.lower():
-                image_url = urljoin(url, src)
-                break
-
-    if not image_url:
-        for img in soup.find_all("img", src=True):
-            src = img["src"].strip()
-            if src and not src.endswith(".gif") and "icon" not in src.lower() and len(src) > 10:
-                image_url = urljoin(url, src)
-                break
+    # ---- 图片：找图/验图规则统一在 image_fetch.py，便于随测试推进逐站点完善 ----
+    rule = image_fetch.site_image_rule(source_name)
+    image_url = "" if rule.get("skip_page_scrape") else image_fetch.extract_image_from_soup(
+        soup, url, rule.get("extra_selectors"),
+    )
 
     if not title and not text:
         logger.warning(f"页面内容为空，跳过: {url}")
@@ -175,11 +162,12 @@ def crawl_site(site_config: dict, max_candidates: int = MAX_CANDIDATES_PER_SITE)
 
     for i, url in enumerate(links, 1):
         logger.info(f"[{i}/{len(links)}] 抓取: {url}")
-        content = extract_article_content(url, session)
+        content = extract_article_content(url, session, source_name=site_config["name"])
         if content:
             content["source"] = site_config["name"]
             content["language"] = site_config.get("language", "zh")
             content["weight"] = site_config.get("weight", 1.0)
+            content["tier"] = site_config.get("tier", "aggregator")
             articles.append(content)
         time.sleep(REQUEST_DELAY + random.uniform(0, 0.5))
 
@@ -191,6 +179,9 @@ def crawl_all_html() -> list[dict]:
     """爬取所有 HTML 站点，返回合并后的文章列表"""
     all_articles = []
     for site in HTML_SOURCES:
+        if not site.get("enabled", True):
+            logger.info(f"[HTML] 跳过已禁用站点: {site['name']}")
+            continue
         logger.info(f"{'='*40}")
         logger.info(f"开始爬取 HTML 站点: {site['name']}")
         articles = crawl_site(site)
@@ -220,15 +211,13 @@ def enrich_rss_articles(articles: list[dict], max_workers: int = 8) -> None:
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "lxml")
 
-            # 补全缺失的 image_url（og:image 优先）
+            # 补全缺失的 image_url：找图规则统一走 image_fetch.py，与首次爬取共用一份判定逻辑
             if not article.get("image_url"):
-                for sel in ('meta[property="og:image"]', 'meta[name="twitter:image"]'):
-                    tag = soup.select_one(sel)
-                    if tag:
-                        src = (tag.get("content") or "").strip()
-                        if src:
-                            article["image_url"] = urljoin(url, src)
-                            break
+                rule = image_fetch.site_image_rule(article.get("source", ""))
+                if not rule.get("skip_page_scrape"):
+                    image_url = image_fetch.extract_image_from_soup(soup, url, rule.get("extra_selectors"))
+                    if image_url:
+                        article["image_url"] = image_url
 
             # 提取正文（保留比已有内容更长的结果）
             new_text = ""

@@ -38,11 +38,17 @@ import config  # noqa: E402
 import reporter  # noqa: E402
 import wechat_render  # noqa: E402
 import analyzer  # noqa: E402
+import image_fetch  # noqa: E402
 
 OUTPUT_DIR = os.path.join(_ROOT, "output")
 
-# 报告文件 basename（不含扩展名）合法形态：daily_YYYY-MM-DD_business / weekly_YYYY-MM-DD_tech
-_REPORT_NAME_RE = re.compile(r"^(daily|weekly)_(\d{4}-\d{2}-\d{2})_(business|tech)$")
+# 报告文件 basename（不含扩展名）合法形态：
+# daily_YYYY-MM-DD_business / weekly_YYYY-MM-DD_tech / weekly_YYYY-MM-DD_tech-handpick
+_REPORT_NAME_RE = re.compile(r"^(daily|weekly)_(\d{4}-\d{2}-\d{2})_(business|tech(?:-handpick)?)$")
+
+
+def _report_kind(slug: str) -> str:
+    return "tech" if str(slug).startswith("tech") else "business"
 
 
 # ============================================================
@@ -107,7 +113,8 @@ def _list_reports() -> list[dict]:
             continue
         out.append({
             "file": name,
-            "kind": m.group(3),
+            "kind": _report_kind(m.group(3)),
+            "variant": m.group(3),
             "date": m.group(2),
             "count": len(rep.get("articles", [])),
             "generated_at": rep.get("generated_at", ""),
@@ -507,9 +514,11 @@ def create_app() -> Flask:
         return jsonify({
             "ok": True,
             "file": name,
-            "kind": m.group(3) if m else "",
+            "kind": _report_kind(m.group(3)) if m else "",
+            "variant": m.group(3) if m else "",
             "date": m.group(2) if m else "",
             "generated_at": rep.get("generated_at", ""),
+            "metadata": rep.get("metadata", {}) or {},
             "executive_summary": rep.get("executive_summary", ""),
             "articles": articles,
         })
@@ -539,19 +548,13 @@ def create_app() -> Flask:
                 return Response(raw, mimetype=mime, headers=headers)
             except Exception:  # noqa: BLE001
                 pass
-        # 2) 远程 URL：带 Referer 代理下载（绕防盗链）
+        # 2) 远程 URL：带 Referer 代理下载（绕防盗链），找图/验图逻辑与出报告时共用 image_fetch
         elif src.startswith(("http://", "https://")):
-            try:
-                import requests
-                resp = requests.get(
-                    src, timeout=8, stream=True,
-                    headers={**reporter.REQUEST_HEADERS, "Referer": article.get("url", "")},
-                )
-                ct = resp.headers.get("Content-Type", "").split(";")[0].strip()
-                if resp.ok and ct.startswith("image/"):
-                    return Response(resp.content, mimetype=ct, headers=headers)
-            except Exception:  # noqa: BLE001
-                pass
+            data, mime = image_fetch.fetch_image_bytes(
+                src, referer=article.get("url", ""), source_name=article.get("source", ""),
+            )
+            if data:
+                return Response(data, mimetype=mime, headers=headers)
         # 3) 兜底：分类 SVG
         svg_bytes, mime = _category_svg_bytes(article)
         return Response(svg_bytes, mimetype=mime, headers=headers)
@@ -614,7 +617,7 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "所选范围内没有条目"}), 400
 
         m = _REPORT_NAME_RE.match(file)
-        kind, dt = m.group(3), m.group(2)
+        kind, dt = _report_kind(m.group(3)), m.group(2)
         title = ("商业动态精选" if kind == "business" else "技术周报精选") + f" · {dt}"
         today = datetime.now().strftime("%Y-%m-%d")
         results: dict[str, dict] = {}
@@ -667,6 +670,8 @@ def create_app() -> Flask:
             days = int(p.get("days") or 7)
         except (TypeError, ValueError):
             top_n, days = config.TECH_TOP_N, 7
+        top_n = min(max(top_n, 1), 100)
+        days = min(max(days, 1), 60)
 
         cutoff = date.today() - timedelta(days=days)
         cands = []
@@ -759,7 +764,7 @@ def create_app() -> Flask:
 
     @app.post("/api/rescore")
     def api_rescore():
-        """改词/改 Prompt 后的「试评分」：用关键词兜底对 raw_articles.json 重打分，
+        """改词后的「试评分」：用关键词兜底对 raw_articles.json 重打分，
         即时、免费、不重爬、不写任何文件。直接反映 GUI 刚保存的关键词词库改动。"""
         p = request.get_json(force=True, silent=True) or {}
         kind = p.get("report", "business")

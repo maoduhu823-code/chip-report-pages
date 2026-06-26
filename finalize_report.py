@@ -28,6 +28,7 @@ print(f"读取分析结果: {input_path}")
 data = json.load(open(input_path, encoding="utf-8"))
 report_type = data["report_type"]          # "business" 或 "tech"
 slug = "business" if report_type == "business" else "tech"
+default_title = "半导体行业商业动态日报" if report_type == "business" else "半导体行业技术周报"
 site_names = [s["name"] for s in RSS_SOURCES] + [s["name"] for s in HTML_SOURCES]
 metadata = data.get("metadata") or {}
 metadata_path = os.path.join("output", "llm_run_metadata.json")
@@ -38,13 +39,13 @@ if not metadata and os.path.exists(metadata_path):
         metadata = {}
 
 html_path = save_report(
-    results=data["results"],
+    results=data.get("results") or data.get("articles", []),
     executive_summary=data.get("executive_summary", ""),
     site_names=site_names,
     candidates_count=data.get("candidates_count", 0),
     report_type=report_type,
     report_slug=slug,
-    report_title=data.get("report_title", "半导体行业报告"),
+    report_title=data.get("report_title", default_title),
     weekly_digest=data.get("weekly_digest", ""),
     appendix=data.get("appendix", []),
     research_questions=data.get("research_questions", []),

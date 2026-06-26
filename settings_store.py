@@ -36,6 +36,15 @@ _SCALAR_OVERRIDES: dict[str, tuple[str, type]] = {
     "dedup_similarity_threshold": ("DEDUP_SIMILARITY_THRESHOLD", float),
 }
 
+_SCALAR_LIMITS: dict[str, tuple[float, float]] = {
+    "business_min_score": (0, 10),
+    "tech_top_n": (1, 100),
+    "business_age_days": (1, 30),
+    "tech_age_days": (1, 60),
+    "scoring_batch_size": (1, 200),
+    "dedup_similarity_threshold": (0, 1),
+}
+
 # 可被 GUI 覆盖的 prompt 全局名（JSON 里放在 "prompts" 子对象下）
 OVERRIDABLE_PROMPTS: tuple[str, ...] = (
     "TECH_RELEVANCE_PROMPT", "BUSINESS_RELEVANCE_PROMPT",
@@ -107,6 +116,14 @@ def _coerce(value, typ):
         return None
 
 
+def _in_range(key: str, value) -> bool:
+    bounds = _SCALAR_LIMITS.get(key)
+    if not bounds:
+        return True
+    lo, hi = bounds
+    return lo <= value <= hi
+
+
 def _coerce_buckets(raw) -> dict | None:
     """关键词桶 JSON（{分类: [词,...]}）转成 {分类: tuple(词)}，与 config 默认结构一致。"""
     if not isinstance(raw, dict):
@@ -127,7 +144,7 @@ def sanitize_settings(payload: dict) -> dict:
     for key, (_gname, typ) in _SCALAR_OVERRIDES.items():
         if key in payload:
             val = _coerce(payload[key], typ)
-            if val is not None:
+            if val is not None and _in_range(key, val):
                 out[key] = val
 
     for json_key in ("rss_sources", "html_sources"):
@@ -142,7 +159,7 @@ def sanitize_settings(payload: dict) -> dict:
             if "enabled" in it:
                 entry["enabled"] = bool(it["enabled"])
             weight = _coerce(it.get("weight"), float)
-            if weight is not None:
+            if weight is not None and weight >= 0:
                 entry["weight"] = weight
             clean.append(entry)
         out[json_key] = clean
@@ -183,7 +200,7 @@ def apply_overrides(g: dict) -> None:
     for key, (gname, typ) in _SCALAR_OVERRIDES.items():
         if key in data:
             val = _coerce(data[key], typ)
-            if val is not None and gname in g:
+            if val is not None and _in_range(key, val) and gname in g:
                 g[gname] = val
 
     # 2) prompt 文本（仅白名单内、非空字符串才覆盖）
@@ -217,7 +234,7 @@ def apply_overrides(g: dict) -> None:
                 if "enabled" in over:
                     src["enabled"] = bool(over["enabled"])
                 weight = _coerce(over.get("weight"), float)
-                if weight is not None:
+                if weight is not None and weight >= 0:
                     src["weight"] = weight
 
 

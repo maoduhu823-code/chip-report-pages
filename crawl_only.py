@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 from config import OUTPUT_DIR, DEDUP_SIMILARITY_THRESHOLD, TECH_ARTICLE_AGE_DAYS
 from rss_crawler import crawl_all_rss
-from crawler import crawl_all_html
+from crawler import crawl_all_html, enrich_rss_articles
 
 
 def deduplicate(articles: list[dict], threshold: float = DEDUP_SIMILARITY_THRESHOLD) -> list[dict]:
@@ -82,7 +82,11 @@ def main():
     all_articles.extend(html_articles)
     logger.info(f"HTML: {len(html_articles)} 篇，合计: {len(all_articles)} 篇")
 
-    # Step 3: 去重
+    # Step 3: 补全 RSS 文章缺失的图片（回原文页抓 og:image）
+    logger.info("[Step 3] 补全缺失图片...")
+    enrich_rss_articles(rss_articles)
+
+    # Step 4: 去重
     before = len(all_articles)
     all_articles = deduplicate(all_articles)
     logger.info(f"去重后: {len(all_articles)} 篇（移除 {before - len(all_articles)} 篇重复）")
@@ -91,7 +95,7 @@ def main():
         logger.error("未抓取到任何文章，请检查网络或站点配置")
         sys.exit(1)
 
-    # Step 4: 保存 JSON
+    # Step 5: 保存 JSON
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = os.path.join(OUTPUT_DIR, "raw_articles.json")
 

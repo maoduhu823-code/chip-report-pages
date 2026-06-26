@@ -176,7 +176,7 @@ function collect() {
 }
 
 // ── 保存 / 重置 ────────────────────────────────────────────────
-async function save() {
+async function save(options = {}) {
   try {
     const resp = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -186,9 +186,11 @@ async function save() {
     if (!resp.ok || !data.ok) throw new Error("保存失败");
     S = data.settings;
     renderAll();
-    toast("✓ 已保存，对手动运行/计划任务/控制台运行同时生效", "ok");
+    if (!options.quiet) toast("已保存采集需求", "ok");
+    return true;
   } catch (e) {
-    toast("保存失败：" + e.message, "err");
+    if (!options.quiet) toast("保存失败：" + e.message, "err");
+    return false;
   }
 }
 

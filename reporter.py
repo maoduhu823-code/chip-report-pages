@@ -1,6 +1,8 @@
 """
 reporter.py — 报告生成模块
-图片策略：优先使用原文真实图片 URL → 加载失败则降级到分类专属 SVG。
+图片策略：优先使用原文真实图片 → 找不到则用该源品牌兜底图（公司新闻室，位图）→ 再退回分类 SVG。
+找图/验图的实现统一在 image_fetch.py（同时供 crawler.py、webgui/app.py 复用），
+本文件只负责「找不到真实图时该用哪张兜底图」这一展示层决策。
 """
 
 import base64
@@ -10,22 +12,14 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from urllib.parse import quote_plus, urljoin
-
-import requests
-from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
 
 from config import (
     OUTPUT_DIR, CATEGORIES,
-    IMAGE_FETCH_TIMEOUT, IMAGE_FETCH_RETRIES, IMAGE_FETCH_WORKERS,
+    IMAGE_FETCH_WORKERS,
+    SOURCE_TIER_LABELS,
 )
-
-
-REQUEST_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-}
-ARTICLE_IMAGE_CACHE: dict[str, str] = {}
+from image_fetch import resolve_article_image, source_fallback_image_uri
 
 
 # ─── 分类专属 SVG 缩略图 ───────────────────────────────────────────
@@ -48,129 +42,17 @@ def _get_category_svg_uri(category: str) -> str:
     return f"data:image/svg+xml;base64,{b64}"
 
 
-def _fetch_image_as_data_uri(url: str, timeout: int = IMAGE_FETCH_TIMEOUT, referer: str = "",
-                             retries: int = IMAGE_FETCH_RETRIES) -> str:
-    """尝试下载外部图片并返回 Base64 Data URI；失败返回空字符串。
-    referer: 传入文章原始页面 URL，绕过防盗链检查。
-    海外图床较慢，超时偏大并支持有限次重试以应对瞬时抖动。"""
-    if not url or url.startswith("data:"):
-        return url
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; SemiBot/1.0)"}
-    if referer:
-        headers["Referer"] = referer
-    for attempt in range(retries + 1):
-        try:
-            resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
-            resp.raise_for_status()
-            ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
-            if not ct.startswith("image/"):
-                return ""
-            data = resp.content
-            if not data or len(data) > 2 * 1024 * 1024:
-                return ""
-            return f"data:{ct};base64,{base64.b64encode(data).decode('ascii')}"
-        except Exception:
-            if attempt < retries:
-                continue
-            return ""
-    return ""
-
-
-def _has_data_payload(url: str) -> bool:
-    """判断 data URI 是否真的带有图片载荷。"""
-    return url.startswith("data:image/") and "," in url and bool(url.rsplit(",", 1)[1])
-
-
-def _is_remote_url(url: str) -> bool:
-    return url.startswith(("http://", "https://"))
-
-
-def _looks_like_content_image(url: str) -> bool:
-    lowered = url.lower()
-    bad_tokens = (
-        "logo", "icon", "avatar", "pixel", "quantcast", "tracking", "tracker",
-        "matomo", "analytics", "beacon", "spacer", "blank", "spinner",
-    )
-    return not any(token in lowered for token in bad_tokens)
-
-
-def _extract_article_image_url(article_url: str, timeout: int = IMAGE_FETCH_TIMEOUT) -> str:
-    """从原文页提取 og/twitter/正文首图 URL。"""
-    if not article_url:
-        return ""
-    if article_url in ARTICLE_IMAGE_CACHE:
-        return ARTICLE_IMAGE_CACHE[article_url]
-
-    image_url = ""
-    try:
-        response = requests.get(article_url, headers=REQUEST_HEADERS, timeout=timeout)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "lxml")
-
-        meta_selectors = [
-            'meta[property="og:image"]',
-            'meta[property="og:image:secure_url"]',
-            'meta[name="twitter:image"]',
-            'meta[name="twitter:image:src"]',
-            'meta[itemprop="image"]',
-            'link[rel="image_src"]',
-        ]
-        for selector in meta_selectors:
-            tag = soup.select_one(selector)
-            src = (tag.get("content") or tag.get("href") or "").strip() if tag else ""
-            if src and _looks_like_content_image(src):
-                image_url = urljoin(article_url, src)
-                break
-
-        if not image_url:
-            for selector in ("article img[src]", "figure img[src]", ".article img[src]", ".content img[src]", "img[src]"):
-                for img in soup.select(selector):
-                    src = (img.get("data-src") or img.get("data-original") or img.get("src") or "").strip()
-                    if src and _looks_like_content_image(src):
-                        image_url = urljoin(article_url, src)
-                        break
-                if image_url:
-                    break
-    except Exception:
-        image_url = ""
-
-    ARTICLE_IMAGE_CACHE[article_url] = image_url
-    return image_url
-
-
 def _resolve_image_src(article: dict) -> str:
-    """返回报告图片地址。
-    优先级：已嵌入图 → RSS/正文已知远程图 → 回原文页抓 og:image → 分类 SVG。
-    远程图一律带文章 URL 作 Referer 下载嵌入（绕防盗链）。
-    """
-    current_url = article.get("image_url", "")
-    original_url = article.get("original_image_url", "")
-    article_url = article.get("url", "")
+    """返回报告图片地址。找图/验图交给 image_fetch.resolve_article_image；
+    实在找不到真实图时的展示层兜底：先用该信息源的品牌兜底图（公司新闻室才配、位图，
+    见 config.SITE_IMAGE_RULES 的 fallback_image），再退回分类 SVG。"""
+    image = resolve_article_image(article)
+    if image:
+        return image
+    fallback = source_fallback_image_uri(article.get("source", ""))
+    if fallback:
+        return fallback
     category = article.get("category") or ("行业商业" if article.get("tags") else "其他")
-
-    # 已是嵌入 data URI（非 SVG），直接复用
-    if current_url.startswith("data:") and _has_data_payload(current_url) and not current_url.startswith("data:image/svg+xml"):
-        return current_url
-
-    # 1) RSS/正文已知远程图：带文章 Referer 下载嵌入，避免防盗链
-    for candidate in (original_url, current_url):
-        if _is_remote_url(candidate) and _looks_like_content_image(candidate):
-            embedded = _fetch_image_as_data_uri(candidate, referer=article_url)
-            if embedded:
-                return embedded
-
-    # 2) RSS 无图：回原文页抓 og:image / 正文首图
-    #    仅当 original_url / current_url 均为空时才额外请求页面，避免重复抓取。
-    #    （EDN、Semiconductor Engineering 等英文源 feed 不带图，图只在页面里；
-    #      若 enrich 步骤已补图，此处会因 original_url 非空而跳过）
-    if not original_url and not current_url:
-        page_image = _extract_article_image_url(article_url)
-        if _is_remote_url(page_image) and _looks_like_content_image(page_image):
-            embedded = _fetch_image_as_data_uri(page_image, referer=article_url)
-            if embedded:
-                return embedded
-
-    # 3) 兜底：分类 SVG（浏览器端 onerror 也会再兜一层）
     return _get_category_svg_uri(category)
 
 
@@ -185,9 +67,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <style>
   *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
   :root{{--bg:#f0f2f7;--card:#fff;--primary:#0f2044;--accent:#1a6cf5;--accent2:#e05c1f;--text:#1e2230;--muted:#6b7280;--border:#e5e7eb}}
-  body{{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.6}}
+  html{{-webkit-text-size-adjust:100%;text-size-adjust:100%}}
+  body{{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}}
+  img{{max-width:100%;display:block}}
   header{{background:linear-gradient(135deg,#0f2044,#1a3a6e 60%,#1a5ca8);color:#fff;padding:36px 48px 28px}}
   .header-top{{display:flex;align-items:center;gap:16px;margin-bottom:8px}}
+  .header-top>div:last-child{{min-width:0}}
   .header-icon{{width:42px;height:42px;background:rgba(255,255,255,.15);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px}}
   header h1{{font-size:24px;font-weight:700;letter-spacing:.02em}}
   header .subtitle{{font-size:13px;color:rgba(255,255,255,.65);margin-top:2px}}
@@ -222,9 +107,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .badge-lang-zh{{background:#fef9c3;color:#854d0e}}
   .badge-lang-en{{background:#fce7f3;color:#9d174d}}
   .badge-date{{background:var(--bg);color:var(--muted)}}
+  .badge-tier-official{{background:#dbeafe;color:#1e40af;font-weight:600}}
+  .badge-tier-regulatory{{background:#fce7f3;color:#9d174d;font-weight:600}}
+  .badge-tier-industry{{background:#d1fae5;color:#065f46;font-weight:600}}
+  .badge-tier-academic{{background:#ede9fe;color:#5b21b6;font-weight:600}}
+  .badge-tier-media{{background:#f3f4f6;color:#6b7280}}
+  .badge-tier-aggregator{{background:#f3f4f6;color:#9ca3af}}
   .keywords{{font-size:11px;color:var(--muted)}}
   .keywords a{{color:var(--muted);text-decoration:none;border-bottom:1px dotted #cbd5e1;margin-right:4px}}
   .keywords a:hover{{color:var(--accent);border-bottom-color:var(--accent)}}
+  .followup{{margin-top:10px;font-size:12.5px;color:#5b21b6;background:#f5f3ff;border-left:3px solid #8b5cf6;padding:7px 12px;border-radius:6px;line-height:1.65}}
   .question-section{{background:var(--card);border-radius:12px;padding:22px 28px;margin:8px 0 36px;box-shadow:0 1px 4px rgba(0,0,0,.05);border:1px solid var(--border)}}
   .question-section h2{{font-size:15px;font-weight:600;color:var(--primary);margin-bottom:10px}}
   .question-list{{list-style:none;display:flex;flex-direction:column;gap:9px}}
@@ -249,7 +141,45 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .appendix-list a{{color:var(--text);text-decoration:none;flex:1;min-width:240px}}
   .appendix-list a:hover{{color:var(--accent);text-decoration:underline}}
   .appendix-meta{{font-size:11px;color:var(--muted);white-space:nowrap}}
-  @media (max-width:640px){{.card{{gap:12px;padding:14px}}.thumb{{width:120px;height:96px}}header{{padding:28px 22px 24px}}}}
+  @media (max-width:760px){{
+    header{{padding:28px 24px 24px}}
+    .container{{padding:24px 16px 44px}}
+    .exec-summary{{margin:24px 16px 0;padding:20px 22px}}
+    .card{{gap:14px;padding:16px}}
+    .thumb{{width:148px;height:108px}}
+  }}
+  @media (max-width:560px){{
+    header{{padding:24px 16px 22px}}
+    .header-top{{align-items:flex-start;gap:12px}}
+    .header-icon{{width:36px;height:36px;border-radius:8px;font-size:19px}}
+    header h1{{font-size:20px;line-height:1.3}}
+    header .subtitle{{font-size:12px;line-height:1.5}}
+    .stats-bar{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;margin-top:18px}}
+    .stat-value{{font-size:18px;line-height:1.25;overflow-wrap:anywhere}}
+    .container{{padding:20px 12px 36px}}
+    .exec-summary,.question-section,.digest-section,.appendix-section{{border-radius:10px;padding:18px 16px}}
+    .exec-summary{{margin:20px 12px 0}}
+    .category-section{{margin-bottom:30px}}
+    .category-header{{align-items:flex-start;gap:8px}}
+    .category-title{{font-size:15px;line-height:1.35}}
+    .card{{display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:9px;margin-bottom:14px}}
+    .card:hover{{transform:none}}
+    .rank{{width:34px;min-width:34px;height:28px;border-radius:7px;font-size:12px}}
+    .thumb{{width:100%;height:auto;aspect-ratio:16/9;border-radius:7px}}
+    .body{{width:100%}}
+    .body h3{{font-size:16px;line-height:1.45;margin-bottom:8px;overflow-wrap:anywhere}}
+    .body p{{font-size:13px;line-height:1.8}}
+    .meta{{gap:7px;margin-top:12px}}
+    .badge{{font-size:11px;line-height:1.55;white-space:normal}}
+    .keywords{{display:block;flex-basis:100%;font-size:11px;line-height:1.8;overflow-wrap:anywhere}}
+    .question-section{{margin-bottom:30px}}
+    .question-list a{{font-size:13px;line-height:1.75;overflow-wrap:anywhere}}
+    .digest-section p{{font-size:13px;line-height:1.85}}
+    .appendix-list li{{display:flex;flex-direction:column;gap:2px;align-items:flex-start;padding:10px 0}}
+    .appendix-list a{{min-width:0;width:100%;line-height:1.6;overflow-wrap:anywhere}}
+    .appendix-meta{{white-space:normal;line-height:1.5}}
+    footer{{padding:20px 14px;font-size:11px;line-height:1.7}}
+  }}
 </style>
 </head>
 <body>
@@ -308,10 +238,12 @@ CARD_TEMPLATE = """<div class="card">
       <span class="badge badge-score">相关度 {score}/10</span>
       <span class="badge badge-source">{source}</span>
       {tags_html}
+      {tier_badge}
       <span class="badge badge-lang-{lang_key}">{lang_label}</span>
       {date_badge}
       <span class="keywords">{keywords}</span>
     </div>
+    {followup_html}
   </div>
 </div>"""
 
@@ -335,15 +267,32 @@ def _format_token_count(value) -> str:
     return f"{value / 1000:.1f}k"
 
 
+def _format_cost(value) -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+    if value <= 0:
+        return ""
+    return f" / 费用 ${value:.4f}"
+
+
 def _build_token_stats(metadata: dict) -> str:
     input_tokens = metadata.get("input_tokens")
+    cache_creation = metadata.get("cache_creation_input_tokens")
+    cache_read = metadata.get("cache_read_input_tokens")
     output_tokens = metadata.get("output_tokens")
     total_tokens = metadata.get("total_tokens")
     if any(isinstance(v, (int, float)) for v in (input_tokens, output_tokens, total_tokens)):
+        cache_parts = []
+        if isinstance(cache_creation, (int, float)) and cache_creation:
+            cache_parts.append(f"缓存写入 {_format_token_count(cache_creation)}")
+        if isinstance(cache_read, (int, float)) and cache_read:
+            cache_parts.append(f"缓存读取 {_format_token_count(cache_read)}")
+        cache_stats = f"（{', '.join(cache_parts)}）" if cache_parts else ""
         return (
             f"输入 {_format_token_count(input_tokens)} / "
             f"输出 {_format_token_count(output_tokens)} / "
             f"合计 {_format_token_count(total_tokens)}"
+            f"{cache_stats}{_format_cost(metadata.get('cost_usd'))}"
         )
     return "未捕获"
 
@@ -406,6 +355,15 @@ def _build_card(article: dict, show_tags: bool = True) -> str:
             if tag.strip()
         )
 
+    tier = article.get("tier", "media")
+    tier_label = SOURCE_TIER_LABELS.get(tier, "行业媒体")
+    tier_badge = f'<span class="badge badge-tier-{tier}">{escape(tier_label)}</span>'
+
+    followup = (article.get("followup_question") or "").strip()
+    followup_html = (
+        f'<div class="followup">🤔 分析师追问：{escape(followup)}</div>' if followup else ""
+    )
+
     return CARD_TEMPLATE.format(
         rank=rank,
         rank_class=rank_class,
@@ -416,10 +374,12 @@ def _build_card(article: dict, show_tags: bool = True) -> str:
         score=article["score"],
         source=escape(article.get("source", "未知来源")),
         tags_html=tags_html,
+        tier_badge=tier_badge,
         lang_key=lang_key,
         lang_label=lang_label,
         date_badge=date_badge,
         keywords=_build_keyword_links(article.get("keywords", "")),
+        followup_html=followup_html,
     )
 
 
@@ -432,11 +392,15 @@ def _build_category_sections(results: list) -> tuple:
     for article in results:
         grouped[article.get("category", "其他")].append(article)
 
+    # 按各分类内最优 rank 排序，使整体阅读顺序与评分排名一致
+    ordered_cats = sorted(
+        (cat for cat in CATEGORIES if grouped.get(cat)),
+        key=lambda cat: min(a["rank"] for a in grouped[cat])
+    )
+
     sections_html = []
-    for cat in CATEGORIES:
-        arts = grouped.get(cat, [])
-        if not arts:
-            continue
+    for cat in ordered_cats:
+        arts = grouped[cat]  # 已按 rank 顺序（results 本身按 rank 排列）
         cards_html = "\n".join(_build_card(a) for a in arts)
         sections_html.append(CATEGORY_SECTION_TEMPLATE.format(
             cat_key=_category_class(cat), category=cat, count=len(arts), cards=cards_html,
